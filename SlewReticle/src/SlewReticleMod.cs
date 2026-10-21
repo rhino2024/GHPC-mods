@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SlewReticle.SlewReticleMod), "Slew Reticle", "1.0.0", "rhino2024")]
+[assembly: MelonInfo(typeof(SlewReticle.SlewReticleMod), "Slew Reticle", "1.0.1", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace SlewReticle
@@ -13,6 +14,8 @@ namespace SlewReticle
     // War-Thunder style third person, automatic: whenever the game is in its exterior camera, a
     // fixed circle sits in the middle of the screen and the turret is slewed to whatever that circle
     // is over. Leaving the exterior view (or binoculars / free cam / the AAR) switches it off again.
+    // Commander view gets the slew without the circle, and holding Z or the mouse right button pulls
+    // the exterior view in through the game's own zoom steps.
     //
     // The whole thing runs through the live gameplay classes - GHPC.Player.PlayerInput,
     // GHPC.Camera.CameraManager and GHPC.Crew.CrewBrainWeaponsModule. The global PlayerControl /
@@ -21,8 +24,9 @@ namespace SlewReticle
     public sealed class SlewReticleMod : MelonMod
     {
         static MelonPreferences_Category cat;
-        static MelonPreferences_Entry<KeyCode> eToggle;
+        static MelonPreferences_Entry<KeyCode> eToggle, eZoomKey;
         static MelonPreferences_Entry<bool> eSlew, eRing, eDebugLog;
+        static MelonPreferences_Entry<bool> eHideRingCommander, eZoomMouse;
         static MelonPreferences_Entry<float> eRingScale, eRingWidth, eAimDistance;
         static MelonPreferences_Entry<float> eRingOffset;
         static MelonPreferences_Entry<string> eRingColor;
@@ -45,6 +49,27 @@ namespace SlewReticle
         static string lastView = "";
         static float viewTimer;
         static float tuneSaveTimer;
+        static bool commanderNow;
+        static bool zoomHeld;
+
+        // switching crew sits the player in another seat, which makes the game hand the turret to
+        // the gunner AI; these let the mod keep aim authority for as long as it is on
+        static readonly FieldInfo SeatField =
+            HarmonyLib.AccessTools.Field(typeof(GHPC.Player.PlayerInput), "_controlledPosition");
+        static readonly FieldInfo FullControlField =
+            HarmonyLib.AccessTools.Field(typeof(GHPC.Player.PlayerInput), "_hasFullVehicleControl");
+        static readonly FieldInfo UnitAIField =
+            HarmonyLib.AccessTools.Field(typeof(GHPC.Player.PlayerInput), "_unitAI");
+        static readonly FieldInfo SweepField =
+            HarmonyLib.AccessTools.Field(typeof(GHPC.AI.GunnerAIController), "_sweepEnabled");
+
+        int lastSeat = int.MinValue;
+        bool lastFullControl;
+        GHPC.AI.UnitAI suppressedUnit;
+        GHPC.AI.GunnerAIController suppressedSweeper;
+        bool suppressedSweep;
+        bool aiSuppressed;
+        bool reassertAI;
 
         public override void OnInitializeMelon()
         {
@@ -57,6 +82,9 @@ namespace SlewReticle
             eRingColor = cat.CreateEntry<string>("RingColor", "4DE673", "Circle colour, RRGGBB hex");
             eAimDistance = cat.CreateEntry<float>("AimDistance", 2000f, "How far the centre ray reaches when it hits nothing");
             eRingOffset = cat.CreateEntry<float>("RingOffsetY", 0.18f, "Circle height above the true screen centre, as a fraction of screen height; the aim ray leaves from the circle. Nudge it live with Keypad + / -");
+            eHideRingCommander = cat.CreateEntry<bool>("HideRingInCommander", true, "Commander view keeps the turret slew but draws no circle and aims from the true screen centre");
+            eZoomKey = cat.CreateEntry<KeyCode>("ZoomKey", KeyCode.Z, "Hold this to pull the exterior view in, release to go back to the base zoom");
+            eZoomMouse = cat.CreateEntry<bool>("ZoomOnMouse", true, "The mouse right button does the same hold-to-zoom; turn this off if it clashes with a binding of your own");
             eDebugLog = cat.CreateEntry<bool>("DebugLog", false, "Write the view / slew diagnostics to Bin/Mods/SlewReticle.debug.log; only turn this on when something is wrong");
 
             if (eDebugLog.Value) OpenLog();
@@ -82,6 +110,9 @@ namespace SlewReticle
 
             var pi = featureOn ? FindInput() : null;
             SetActive(pi);
+            WatchSeat(pi);
+            commanderNow = CommanderMode();
+            HandleZoom(activeNow);
 
             if (!activeNow) return;
             SyncRing();
@@ -93,7 +124,12 @@ namespace SlewReticle
         {
             SetActive(null);
             cachedInput = null;
+            lastSeat = int.MinValue;
+            lastFullControl = false;
             harvested = false;
+            // the follow camera of the old scene is gone, so the held zoom is simply forgotten
+            zoomHeld = false;
+            commanderNow = false;
             inMission = !string.IsNullOrEmpty(sceneName)
                 && sceneName.IndexOf("Menu", StringComparison.OrdinalIgnoreCase) < 0
                 && sceneName.IndexOf("LOADER", StringComparison.OrdinalIgnoreCase) < 0;
@@ -113,9 +149,183 @@ namespace SlewReticle
             if (want == activeNow) return;
             activeNow = want;
             if (want) { lastAimDir = Vector3.zero; reportTimer = 0f; SyncRing(); }
+            else RestoreGunnerAI();
             Log("slew " + (want ? "ON" : "off") + " | " + LiveState(pi)
                 + (want ? " ring=" + (ringTexture != null ? ringTexture.width + "px" : "none")
-                    + " offsetY=" + eRingOffset.Value : ""));
+                    + " offsetY=" + eRingOffset.Value + " gunnerAI=" + AiState(pi) : ""));
+        }
+
+        // "switch crew member" is not a camera action: SwitchRoles only moves the player to another
+        // seat and lets UnitAI re-enable every crew brain, the gunner's included. An AI gunner then
+        // sweeps and aims the same FCS from its own Update, so the circle stays on screen but the
+        // turret stops following it. While the mod is on it owns the aim, so the gunner brain is
+        // parked for the duration and handed back untouched when the mod leaves.
+        void WatchSeat(GHPC.Player.PlayerInput pi)
+        {
+            int seat = SeatOf(pi);
+            bool full = FullControlOf(pi);
+
+            if (seat != lastSeat || full != lastFullControl)
+            {
+                bool first = lastSeat == int.MinValue;
+                lastSeat = seat;
+                lastFullControl = full;
+                if (!first && pi != null)
+                {
+                    // the game turned the gunner AI back on as part of the switch; the claim has
+                    // to be re-issued, not just held
+                    reassertAI = true;
+                    Log("crew seat -> " + SeatName(seat) + " fullControl=" + (full ? 1 : 0)
+                        + " active=" + (activeNow ? 1 : 0) + " gunnerAI=" + AiState(pi)
+                        + " | " + LiveState(pi));
+                }
+            }
+
+            if (pi == null)
+            {
+                if (!activeNow) RestoreGunnerAI();
+                return;
+            }
+
+            if (activeNow) SuppressGunnerAI(pi);
+            else RestoreGunnerAI();
+        }
+
+        void SuppressGunnerAI(GHPC.Player.PlayerInput pi)
+        {
+            var unit = UnitAIOf(pi);
+            if (unit == null || unit.GunnerAI == null) return;
+            if (aiSuppressed && suppressedUnit == unit && !reassertAI) return;
+
+            var sweeper = unit.GunnerAIController;
+            bool claimOnThisUnit = !aiSuppressed || suppressedUnit != unit;
+            if (claimOnThisUnit)
+            {
+                if (aiSuppressed) RestoreGunnerAI(true);
+                bool sweep = false;
+                if (sweeper != null && SweepField != null)
+                {
+                    try { sweep = (bool)SweepField.GetValue(sweeper); }
+                    catch { }
+                }
+                suppressedSweep = sweep;
+            }
+            reassertAI = false;
+
+            try
+            {
+                if (sweeper != null) sweeper.StopSweep();
+                unit.SetCrewAIEnabled(GHPC.Crew.CrewPosition.Gunner, false);
+                suppressedUnit = unit;
+                suppressedSweeper = sweeper;
+                aiSuppressed = true;
+            }
+            catch (Exception e)
+            {
+                Log("gunner AI suppress threw: " + e.Message);
+            }
+        }
+
+        void RestoreGunnerAI(bool leftUnit = false)
+        {
+            reassertAI = false;
+            if (!aiSuppressed) return;
+            aiSuppressed = false;
+
+            var unit = suppressedUnit;
+            var sweeper = suppressedSweeper;
+            bool sweep = suppressedSweep;
+            suppressedUnit = null;
+            suppressedSweeper = null;
+            suppressedSweep = false;
+
+            if (unit == null || unit.GunnerAI == null) return;
+
+            // a unit the player just left is fully AI driven now, whatever the player's own seat
+            // and control flags say
+            bool want = leftUnit || GameWantsGunnerAI();
+            try
+            {
+                unit.SetCrewAIEnabled(GHPC.Crew.CrewPosition.Gunner, want);
+                if (want && sweep && sweeper != null) sweeper.ResumeSweep();
+            }
+            catch (Exception e)
+            {
+                Log("gunner AI restore threw: " + e.Message);
+            }
+        }
+
+        // exactly the rule the game itself applies: full vehicle control means the player is the
+        // gunner, otherwise the AI only steps aside while the gunner seat is occupied
+        bool GameWantsGunnerAI()
+        {
+            var pi = cachedInput;
+            if (FullControlOf(pi)) return false;
+            return SeatOf(pi) != (int)GHPC.Crew.CrewPosition.Gunner;
+        }
+
+        static int SeatOf(GHPC.Player.PlayerInput pi)
+        {
+            if (pi == null || SeatField == null) return -1;
+            try { return Convert.ToInt32(SeatField.GetValue(pi)); }
+            catch { return -1; }
+        }
+
+        static bool FullControlOf(GHPC.Player.PlayerInput pi)
+        {
+            if (pi == null || FullControlField == null) return false;
+            try { return (bool)FullControlField.GetValue(pi); }
+            catch { return false; }
+        }
+
+        static GHPC.AI.UnitAI UnitAIOf(GHPC.Player.PlayerInput pi)
+        {
+            if (pi == null) return null;
+            try
+            {
+                if (UnitAIField != null)
+                {
+                    var unit = UnitAIField.GetValue(pi) as GHPC.AI.UnitAI;
+                    if (unit != null) return unit;
+                }
+            }
+            catch { }
+
+            try
+            {
+                var playerUnit = pi.CurrentPlayerUnit;
+                return playerUnit != null
+                    ? playerUnit.GetComponentInChildren<GHPC.AI.UnitAI>()
+                    : null;
+            }
+            catch { return null; }
+        }
+
+        static string AiState(GHPC.Player.PlayerInput pi)
+        {
+            var unit = UnitAIOf(pi);
+            if (unit == null) return "-";
+            try
+            {
+                var gunner = unit.GunnerAI;
+                if (gunner == null) return "none";
+                return gunner.enabled ? "on" : "off";
+            }
+            catch { return "-"; }
+        }
+
+        static string SeatName(int seat)
+        {
+            switch (seat)
+            {
+                case 0: return "Commander";
+                case 1: return "Driver";
+                case 2: return "Gunner";
+                case 3: return "Loader";
+                case 4: return "CavScout";
+                case 5: return "Generic";
+                default: return "-";
+            }
         }
 
         void Slew(GHPC.Player.PlayerInput pi)
@@ -123,7 +333,7 @@ namespace SlewReticle
             var cam = MainCam();
             if (cam == null || !cam.isActiveAndEnabled) return;
 
-            var centre = RingPixel();
+            var centre = AimPixel();
             var ray = cam.ScreenPointToRay(centre);
             float far = Mathf.Clamp(eAimDistance.Value, 50f, 4000f);
 
@@ -199,12 +409,15 @@ namespace SlewReticle
 
         GHPC.Player.PlayerInput FindInput()
         {
+            // the singleton can be replaced between missions; re-check its identity before trusting
+            // the cache, otherwise the seat watcher would read state off a dead object
+            GHPC.Player.PlayerInput live = null;
+            try { live = GHPC.Player.PlayerInput.Instance; }
+            catch (Exception e) { if (cachedInput == null) Log("PlayerInput.Instance threw: " + e.Message); }
+            if (live != null && live != cachedInput) cachedInput = live;
+
             if (cachedInput != null && cachedInput.gameObject != null) return cachedInput;
             cachedInput = null;
-
-            try { cachedInput = GHPC.Player.PlayerInput.Instance; }
-            catch (Exception e) { Log("PlayerInput.Instance threw: " + e.Message); }
-            if (cachedInput != null) return cachedInput;
 
             var found = UnityEngine.Object.FindObjectsOfType<GHPC.Player.PlayerInput>();
             if (found != null && found.Length > 0)
@@ -260,6 +473,58 @@ namespace SlewReticle
             var follow = FollowCam();
             try { return follow != null && follow.IsInFreeFlyMode; }
             catch { return false; }
+        }
+
+        static bool CommanderMode()
+        {
+            var follow = FollowCam();
+            try { return follow != null && follow.IsCommanderMode; }
+            catch { return false; }
+        }
+
+        // ---------------------------------------------------------------- zoom
+
+        // Hold Z (or the mouse right button) and the game's own zoom steps run to the strongest level;
+        // letting go returns to the base level. AdjustZoom is what the mouse wheel uses, so the zoom
+        // audio, the FOV events and the optic coupling all still fire as they do without the mod.
+        void HandleZoom(bool canZoom)
+        {
+            bool held;
+            try
+            {
+                held = (eZoomKey.Value != KeyCode.None && Input.GetKey(eZoomKey.Value))
+                    || (eZoomMouse.Value && Input.GetMouseButton(1));
+            }
+            catch { return; }
+
+            if (zoomHeld && !held) ReleaseZoom();
+            else if (!zoomHeld && held && canZoom) BeginZoom();
+        }
+
+        void BeginZoom()
+        {
+            var follow = FollowCam();
+            if (follow == null) return;
+            try
+            {
+                follow.AdjustZoom(true, true);
+                zoomHeld = true;
+                Log("zoom in held");
+            }
+            catch (Exception e) { Log("zoom in threw: " + e.Message); }
+        }
+
+        void ReleaseZoom()
+        {
+            zoomHeld = false;
+            var follow = FollowCam();
+            if (follow == null) return;
+            try
+            {
+                follow.AdjustZoom(false, true);
+                Log("zoom released");
+            }
+            catch (Exception e) { Log("zoom release threw: " + e.Message); }
         }
 
         static GHPC.Crew.CrewBrainWeaponsModule WeaponsModule(GHPC.Player.PlayerInput pi)
@@ -393,6 +658,8 @@ namespace SlewReticle
             sb.Append("pi=").Append(pi != null ? pi.gameObject.name : "-");
             sb.Append(" ext=").Append(Exterior(pi) ? 1 : 0);
             sb.Append(" canGunner=").Append(CanGunner(pi) ? 1 : 0);
+            sb.Append(" seat=").Append(SeatName(SeatOf(pi)))
+                .Append(" full=").Append(FullControlOf(pi) ? 1 : 0);
             var module = WeaponsModule(pi);
             var info = SafeWeapon(pi);
             sb.Append(" brain=").Append(module != null ? 1 : 0)
@@ -406,6 +673,7 @@ namespace SlewReticle
             var cam = MainCam();
             sb.Append(" camMgr=").Append(cm != null ? 1 : 0)
                 .Append(" follow=").Append(follow != null ? 1 : 0)
+                .Append(" cmd=").Append(CommanderMode() ? 1 : 0)
                 .Append(" cam=").Append(cam != null ? cam.name : "-")
                 .Append(" root=").Append(PlayerRoot() != null ? PlayerRoot().name : "-");
             sb.Append(" av=").Append(UnityEngine.Object.FindObjectsOfType<GHPC.AarVisual>().Length);
@@ -553,6 +821,15 @@ namespace SlewReticle
             return new Vector3(Screen.width * 0.5f, Screen.height * (0.5f + offset), 0f);
         }
 
+        // Commander view draws no circle, so there is nothing to aim along: the turret follows the
+        // camera direction itself, which is the true screen centre.
+        static Vector3 AimPixel()
+        {
+            if (eHideRingCommander != null && eHideRingCommander.Value && commanderNow)
+                return new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f);
+            return RingPixel();
+        }
+
         // how high the circle has to sit to clear the hull is only judgeable on screen, so let it be
         // nudged live rather than restarting the game once per guess
         void TuneRingOffset()
@@ -589,6 +866,7 @@ namespace SlewReticle
         public override void OnGUI()
         {
             if (!activeNow || !eRing.Value || ringTexture == null) return;
+            if (eHideRingCommander.Value && commanderNow) return;
 
             var matrix = GUI.matrix;
             GUI.matrix = Matrix4x4.identity;

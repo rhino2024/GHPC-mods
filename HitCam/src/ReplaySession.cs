@@ -13,6 +13,7 @@ namespace HitCam
     internal sealed class ReplaySession
     {
         const int MaxCaptionLines = 4;
+        const float RenderInterval = 1f / 30f;
 
         static readonly MethodInfo CreateShotTrace =
             AccessTools.Method(typeof(AarController), "createShotTrace");
@@ -57,6 +58,7 @@ namespace HitCam
         float victimExtent = 8f;
         float yaw;
         float elapsed;
+        float renderClock;
         bool tracesCreated;
         bool visualsApplied;
 
@@ -66,6 +68,7 @@ namespace HitCam
             pivot = victim.transform;
 
             texture = new RenderTexture(HitCamMod.WindowWidth, HitCamMod.WindowHeight, 24);
+            texture.antiAliasing = 1;
             int live = LiveViewMask();
 
             // exactly the two-pass stack the game builds for its own AAR: the world pass draws
@@ -102,7 +105,7 @@ namespace HitCam
             camera.depth = depth;
             camera.cullingMask = mask;
             camera.allowHDR = false;
-            camera.allowMSAA = true;
+            camera.allowMSAA = false;
             camera.targetTexture = texture;
             // never enabled: the window is drawn by our own Render() calls, so the game's camera
             // stack and its timing are untouched
@@ -867,7 +870,12 @@ namespace HitCam
             }
             if (elapsed >= HitCamMod.Duration) return true;
 
-            yaw += HitCamMod.OrbitSpeed * deltaTime;
+            // the window is a second full-scene render; 30 Hz is smooth enough for a slow orbit
+            // and stops the extra draw work from scaling with the game's frame rate
+            renderClock += deltaTime;
+            if (frames > 0 && renderClock < RenderInterval * 0.95f) return false;
+            yaw += HitCamMod.OrbitSpeed * renderClock;
+            renderClock = 0f;
             AimCamera();
             RenderFrame();
             return false;

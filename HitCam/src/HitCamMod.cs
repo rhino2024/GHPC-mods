@@ -7,7 +7,7 @@ using ShellInfo = GHPC.Weapons.ShotInfo;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(HitCam.HitCamMod), "Hit Cam", "1.0.0", "rhino2024")]
+[assembly: MelonInfo(typeof(HitCam.HitCamMod), "Hit Cam", "1.0.1", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace HitCam
@@ -23,7 +23,7 @@ namespace HitCam
         static MelonPreferences_Category cat;
         static MelonPreferences_Entry<bool> eEnabled, eInterior, eInfoText, eFlightPath, eDebugLog;
         static MelonPreferences_Entry<float> eDuration, eOrbitSpeed, eFov, eElevation, eDistanceScale, eFlightLeg;
-        static MelonPreferences_Entry<int> eWidth, eHeight, eMinCaliber, eMargin;
+        static MelonPreferences_Entry<int> eWidth, eHeight, eMinCaliber, eMargin, eConfigRevision;
         static MelonPreferences_Entry<KeyCode> eToggle;
 
         static readonly List<Request> queue = new List<Request>();
@@ -50,8 +50,8 @@ namespace HitCam
             cat = MelonPreferences.CreateCategory("HitCam", "Hit Cam");
             eEnabled = cat.CreateEntry<bool>("Enabled", true, "Master switch");
             eDuration = cat.CreateEntry<float>("Duration", 3f, "Seconds the replay window stays open");
-            eWidth = cat.CreateEntry<int>("WindowWidth", 800, "Replay texture width");
-            eHeight = cat.CreateEntry<int>("WindowHeight", 450, "Replay texture height");
+            eWidth = cat.CreateEntry<int>("WindowWidth", 640, "Replay texture width");
+            eHeight = cat.CreateEntry<int>("WindowHeight", 360, "Replay texture height");
             eMargin = cat.CreateEntry<int>("Margin", 24, "Distance from the top right corner, in pixels");
             eMinCaliber = cat.CreateEntry<int>("MinCaliberMm", 40, "Hide the window for shells below this caliber");
             eOrbitSpeed = cat.CreateEntry<float>("OrbitSpeed", 26f, "Camera orbit speed, degrees per second");
@@ -64,6 +64,20 @@ namespace HitCam
             eFlightLeg = cat.CreateEntry<float>("FlightLegMeters", 25f, "Trace legs longer than this are the flight path and get hidden");
             eToggle = cat.CreateEntry<KeyCode>("ToggleKey", KeyCode.F9, "Toggles the mod at runtime");
             eDebugLog = cat.CreateEntry<bool>("DebugLog", false, "Write diagnostic lines to Bin/Mods/HitCam.debug.log; only turn this on when something is wrong");
+            eConfigRevision = cat.CreateEntry<int>("ConfigRevision", 0, "Do not edit; tracks one-time config migrations");
+
+            // 1.0.0 shipped an 800x450 window. It costs a second full-scene render, so existing
+            // configs move to the smaller default once instead of keeping the old size forever.
+            if (eConfigRevision.Value < 1)
+            {
+                if (eWidth.Value == 800 && eHeight.Value == 450)
+                {
+                    eWidth.Value = 640;
+                    eHeight.Value = 360;
+                }
+                eConfigRevision.Value = 1;
+                try { cat.SaveToFile(false); } catch (Exception e) { Log("saving the config migration threw: " + e.Message); }
+            }
 
             if (eDebugLog.Value) OpenLog();
             MelonLogger.Msg("Hit Cam loaded (debug log " + (eDebugLog.Value ? "on" : "off") + ")");

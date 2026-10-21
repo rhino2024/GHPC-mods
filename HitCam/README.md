@@ -38,8 +38,9 @@ Requires MelonLoader **v0.7.2** (net35 runtime). It is not included.
 | --- | --- | --- |
 | `Enabled` | `true` | master switch |
 | `ToggleKey` | `F9` | runtime toggle |
+| `ConfigRevision` | `0` | internal marker for one-time config migrations; leave it alone |
 | `Duration` | `3` | seconds the window stays open |
-| `WindowWidth` / `WindowHeight` | `800` / `450` | replay image size in pixels |
+| `WindowWidth` / `WindowHeight` | `640` / `360` | replay image size in pixels |
 | `Margin` | `24` | distance from the top-right corner, pixels |
 | `MinCaliberMm` | `40` | ignore shells below this calibre |
 | `OrbitSpeed` | `26` | camera orbit speed, degrees per second |
@@ -62,6 +63,10 @@ draws the AAR art on top of the hull — mirroring how the game builds its own r
 vehicle's own follow roots (`HULL FOLLOW` / `TURRET FOLLOW`) located by world-space bounds so it works
 on vehicles that name them differently. Interior parts are switched on through the game's own
 `AarVisual` highlighting and restored when the window closes.
+
+The window is a second full-scene render, so it is deliberately cheap: it redraws at most every
+33 ms (30 Hz, which is plenty for a slow orbit), runs with MSAA off, and only lives for `Duration`
+seconds. If it ever costs you more than you want, lower `WindowWidth` / `WindowHeight`.
 
 ## Known limits
 
