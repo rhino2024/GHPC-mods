@@ -5,7 +5,7 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(WreckCleanup.WreckCleanupMod), "Wreck Cleanup", "1.0.0", "rhino2024")]
+[assembly: MelonInfo(typeof(WreckCleanup.WreckCleanupMod), "Wreck Cleanup", "1.0.1", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace WreckCleanup
@@ -108,12 +108,17 @@ namespace WreckCleanup
 
             var playerUnit = PlayerUnit();
             int wrecks = 0;
+            int vehicles = 0;
             var ready = new List<GHPC.Unit>();
 
             for (int i = 0; i < units.Length; i++)
             {
                 var unit = units[i];
                 if (unit == null || unit.gameObject == null || !unit.gameObject.activeSelf) continue;
+
+                var type = unit.Type;
+                if (type == GHPC.UnitType.GroundVehicle || type == GHPC.UnitType.AirVehicle) vehicles++;
+
                 if (!IsWreck(unit)) continue;
 
                 int id = unit.GetInstanceID();
@@ -132,7 +137,7 @@ namespace WreckCleanup
 
             int threshold = Math.Max(1, eThreshold.Value);
             if (eDebugLog.Value)
-                Log("sweep: units=" + units.Length + " wrecks=" + wrecks
+                Log("sweep: units=" + units.Length + " vehicles=" + vehicles + " wrecks=" + wrecks
                     + " ready=" + ready.Count + " threshold=" + threshold
                     + " hidden=" + hiddenWrecks.Count);
 
@@ -147,7 +152,11 @@ namespace WreckCleanup
 
         static bool IsWreck(GHPC.Unit unit)
         {
-            if (!unit.Destroyed) return false;
+            // Unit.Destroyed is only ever set for helicopters (NotifyDestroyed has exactly one
+            // caller); a burnt-out hull on the ground is flagged through UnitIncapacitated.
+            // Neutralized is the game's own "this unit is lost" flag, the one the casualty counts
+            // and the tactical map read, so it covers both.
+            if (!unit.Neutralized && !unit.Destroyed) return false;
             var type = unit.Type;
             return type == GHPC.UnitType.GroundVehicle || type == GHPC.UnitType.AirVehicle;
         }

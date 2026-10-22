@@ -1,7 +1,34 @@
 # Changelog
 
-Tags are per mod, so each mod can be released on its own: `SlewReticle-v1.0.1`, `HitCam-v1.0.1`,
-`RepairMenu-v1.0.0`, `WreckCleanup-v1.0.0`.
+Tags are per mod for the source (`SlewReticle-v1.0.1`, `HitCam-v1.0.1`, `RepairMenu-v1.0.1`,
+`WreckCleanup-v1.0.1`). The GHPC Mod Manager reads the repository's **newest** release, so that one release
+has to carry the zips of every registered mod - see [manager/README.md](manager/README.md).
+
+## Repair Menu 1.0.1 — 2026-10-22
+
+- **The Repair submenu survives dying, crew changes and a new vehicle.** The game's `ContextMenuRoot` is a
+  single shared object that only `ContextMenuBuilder.Clear` empties, and the death / new-vehicle paths can
+  skip that call - so the old "is there already a Repair node?" guard could latch permanently and the
+  entries never came back. The mod now keeps a signature of the unit plus the labels it added: same
+  signature means it only re-registers the button count, a different one destroys the stale node with
+  `DestroyImmediate` (the builder adopts children by name in the same frame) and rebuilds.
+- Two vehicles of the same type damaged in the same places no longer share rows: the unit is part of the
+  signature, so a menu cannot keep pointing at the vehicle the player left.
+- A healthy vehicle with nothing to offer leaves no trace at all instead of an empty Repair submenu.
+- While a repair is running, another vehicle's menu shows `Repair/busy on another vehicle` rather than
+  offering a second job.
+- Every silent early return now logs with `DebugLog = true`, so a missing menu is diagnosable from
+  `Bin/Mods/RepairMenu.debug.log` instead of guessed at.
+
+## Wreck Cleanup 1.0.1 — 2026-10-22
+
+- **Wrecks are now detected the way the game detects them.** The first build only looked at
+  `Unit.Destroyed`, which GHPC sets for helicopters alone; a burnt-out ground vehicle goes through
+  `Unit.Neutralized` - the same flag the casualty report and the tactical map read. With `Destroyed` only,
+  a field of five burning hulks counted as zero wrecks and nothing was ever cleared. Both flags are now
+  accepted.
+- The sweep line gained `vehicles=` next to `units= / wrecks= / ready= / hidden=`, so which stage came up
+  empty is readable at a glance.
 
 ## Slew Reticle 1.0.1 — 2026-10-21
 
@@ -58,11 +85,15 @@ First public release.
   cleaned again afterwards.
 - `F8` toggles the cleanup mid-mission. Sweeps run once per second and stop while paused.
 
-## Play-test status of the 2026-10-21 builds
+## Play-test status
 
-The 1.0.1 fixes and both new mods are built and deployed against the current Steam build and compile
-clean, but the in-game pass on these specific changes is still open. If something shows up in play, it
-gets fixed forward in `1.0.2` / `1.0.1` rather than by moving a published tag.
+**Repair Menu 1.0.1 and Wreck Cleanup 1.0.1 have been driven in game** and are the builds registered with
+the GHPC Mod Manager directory.
+
+Slew Reticle 1.0.3 (camera parked at the turret, white ring, muzzle-direction ring) and Hit Cam 1.0.2
+(black background, pre-impact slow motion, health-based colouring) are built and deployed locally but have
+not been confirmed in game yet, so they are not registered and no tag points at them. They get fixed
+forward rather than by moving a published tag.
 
 ## Slew Reticle 1.0.0 — 2026-10-21
 

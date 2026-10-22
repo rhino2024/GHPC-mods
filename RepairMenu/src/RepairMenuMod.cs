@@ -13,7 +13,7 @@ using NWH.VehiclePhysics;
 using UnityEngine;
 using UnityEngine.Events;
 
-[assembly: MelonInfo(typeof(RepairMenu.RepairMenuMod), "Repair Menu", "1.0.0", "rhino2024")]
+[assembly: MelonInfo(typeof(RepairMenu.RepairMenuMod), "Repair Menu", "1.0.1", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace RepairMenu
@@ -57,6 +57,13 @@ namespace RepairMenu
         static MelonPreferences_Entry<float> eRepairSeconds;
         static StreamWriter log;
         static Job job;
+
+        // the Q menu root is one shared object that PlayerInput instantiates in Awake, and the game
+        // only empties it through ContextMenuBuilder.Clear - which the death / new-vehicle paths can
+        // skip. So the entries are rebuilt from this signature instead of from "does a Repair node
+        // already exist", which is a test that can latch permanently.
+        static string lastSignature = "";
+        static int lastAdded;
 
         static readonly FieldInfo BuilderField =
             AccessTools.Field(typeof(PlayerInput), "_contextMenuBuilder");
@@ -118,6 +125,9 @@ namespace RepairMenu
         {
             originalTransmission.Clear();
             job = null;
+            // the shared Q menu root of the old mission is gone; the signature must not be reused
+            lastSignature = "";
+            lastAdded = 0;
             Log("scene loaded: " + sceneName);
         }
 
@@ -147,60 +157,83 @@ namespace RepairMenu
             {
                 if (pi == null) return;
                 var unit = pi.CurrentPlayerUnit;
-                if (unit == null) return;
+                if (unit == null) { Log("inject skipped: no player unit"); return; }
 
                 var damage = unit.GetComponentInChildren<ChassisDamageManager>(true);
-                if (damage == null) return;
+                if (damage == null) { Log("inject skipped: no chassis damage under " + unit.name); return; }
 
                 var builder = BuilderField != null
                     ? BuilderField.GetValue(pi) as ContextMenuBuilder
                     : null;
-                if (builder == null) return;
+                if (builder == null) { Log("inject skipped: no context menu builder"); return; }
 
                 var root = pi.ContextMenuRoot;
-                if (root == null || root.transform.Find("Repair") != null) return;
+                if (root == null) { Log("inject skipped: no context menu root"); return; }
 
                 var damaged = DamagedModules(damage);
-                if (damaged.Count == 0 && job == null) return;
+                if (damaged.Count == 0 && job == null)
+                {
+                    // nothing to offer, so leave no trace: a healthy tank shows its own menu
+                    lastSignature = "";
+                    return;
+                }
 
-                UnityAction close = delegate { CloseMenu(pi); };
-                int added = 0;
+                var labels = new List<string>();
+                var actions = new List<UnityAction>();
 
                 // one crew can only turn one wrench: while a job is running the submenu offers the
                 // remaining time and a way to back out of it
                 if (job != null)
                 {
                     bool sameUnit = job.Unit == unit;
-                    string label = sameUnit
-                        ? "Repair/" + DescribeTargets(job.Targets) + " - "
-                            + RemainingLabel(job) + ", click to cancel"
-                        : "Repair/busy on another vehicle";
-
+                    labels.Add(sameUnit
+                        ? "Repair/" + DescribeTargets(job.Targets) + " - " + RemainingLabel(job) + ", click to cancel"
+                        : "Repair/busy on another vehicle");
                     Job captured = job;
-                    builder.AddButton(close, label,
-                        (UnityAction)delegate { if (sameUnit) CancelRepair(captured); }, false);
-                    pi.ContextMenuButtonCount += 1;
-                    Log("menu built: busy entry \"" + label + "\"");
+                    actions.Add(delegate { if (sameUnit) CancelRepair(captured); });
+                }
+                else
+                {
+                    labels.Add("Repair/All (" + SecondsLabel(damaged) + ")");
+                    actions.Add(delegate { Repair(pi, null); });
+
+                    for (int i = 0; i < damaged.Count; i++)
+                    {
+                        CoreModule module = damaged[i].Module;
+                        var single = new List<Repairable> { damaged[i] };
+                        labels.Add("Repair/" + ModuleName(module)
+                            + " (" + HealthLabel(damaged[i].Component) + ", " + SecondsLabel(single) + ")");
+                        actions.Add(delegate { Repair(pi, module); });
+                    }
+                }
+
+                // the unit is part of the signature: two tanks of the same type damaged in the same
+                // places would otherwise let the old rows keep pointing at the vehicle the player left
+                string signature = unit.name + "|" + string.Join(";", labels.ToArray());
+                if (signature == lastSignature)
+                {
+                    // the rows the menu is holding right now are exactly these ones; the game calls
+                    // this every frame the menu stays open
+                    pi.ContextMenuButtonCount += lastAdded;
                     return;
                 }
 
-                builder.AddButton(close, "Repair/All (" + SecondsLabel(damaged) + ")",
-                    (UnityAction)delegate { Repair(pi, null); }, false);
-                added++;
-
-                for (int i = 0; i < damaged.Count; i++)
+                var stale = root.transform.Find("Repair");
+                if (stale != null)
                 {
-                    CoreModule module = damaged[i].Module;
-                    var single = new List<Repairable> { damaged[i] };
-                    string label = "Repair/" + ModuleName(module)
-                        + " (" + HealthLabel(damaged[i].Component) + ", " + SecondsLabel(single) + ")";
-                    builder.AddButton(close, label,
-                        (UnityAction)delegate { Repair(pi, module); }, false);
-                    added++;
+                    // DestroyImmediate, not Destroy: the builder looks its children up by name in this
+                    // same frame and would otherwise adopt the rows that are about to die
+                    UnityEngine.Object.DestroyImmediate(stale.gameObject);
                 }
 
-                pi.ContextMenuButtonCount += added;
-                Log("menu built: " + added + " repair entries, damaged=" + damaged.Count
+                UnityAction close = delegate { CloseMenu(pi); };
+                for (int i = 0; i < labels.Count; i++)
+                    builder.AddButton(close, labels[i], actions[i], false);
+
+                lastSignature = signature;
+                lastAdded = labels.Count;
+                pi.ContextMenuButtonCount += labels.Count;
+                Log("menu built: " + labels.Count + " repair entries, damaged=" + damaged.Count
                     + " unit=" + unit.name);
             }
             catch (Exception e)

@@ -58,10 +58,13 @@ paused, and the per-sweep log line exists only with `DebugLog = true`.
 
 ## How it works
 
-No Harmony patch. Each sweep lists the active `GHPC.Unit` components, keeps the ones whose `Destroyed`
-flag is set and whose `Type` is a ground or air vehicle, times how long each has been dead from the
-moment the mod first saw it, and calls `SetActive(false)` on the ones that qualify. It remembers the
-units it hid so the AAR can hand them back.
+No Harmony patch. Each sweep lists the `GHPC.Unit` components in the scene, keeps the ones the game itself
+counts as lost - `Unit.Neutralized`, the same flag the casualty report and the tactical map read, plus
+`Unit.Destroyed` for the cases where it is set separately - and whose `Type` is a ground or air vehicle.
+`Destroyed` alone is not enough: the game only sets it for helicopters, while a burnt-out ground vehicle
+goes through `Neutralized`. It times how long each wreck has been dead from the moment the mod first saw
+it, and calls `SetActive(false)` on the ones that qualify. It remembers the units it hid so the AAR can
+hand them back.
 
 ## Known limits
 

@@ -8,10 +8,13 @@ Each mod is packaged and released separately — take only the one you want.
 | --- | --- | --- | --- | --- |
 | [Slew Reticle](SlewReticle/README.md) | War Thunder style exterior aiming: a fixed screen circle that the turret slews to, hold-to-zoom, commander view slews without the circle | [`SlewReticle/src`](SlewReticle/src) | `SlewReticle-v1.0.1` | `GHPC-SlewReticle-1.0.1.zip` |
 | [Hit Cam](HitCam/README.md) | a hit replay window in the corner for a few seconds after your shell lands, orbiting the struck vehicle with its interior damage | [`HitCam/src`](HitCam/src) | `HitCam-v1.0.1` | `GHPC-HitCam-1.0.1.zip` |
-| [Repair Menu](RepairMenu/README.md) | a Repair submenu inside the game's own Q menu: pick the damaged module to fix, and the work takes real time | [`RepairMenu/src`](RepairMenu/src) | `RepairMenu-v1.0.0` | `GHPC-RepairMenu-1.0.0.zip` |
-| [Wreck Cleanup](WreckCleanup/README.md) | switches burnt-out wrecks off once the field holds enough of them, so they stop costing frames | [`WreckCleanup/src`](WreckCleanup/src) | `WreckCleanup-v1.0.0` | `GHPC-WreckCleanup-1.0.0.zip` |
+| [Repair Menu](RepairMenu/README.md) | a Repair submenu inside the game's own Q menu: pick the damaged module to fix, and the work takes real time | [`RepairMenu/src`](RepairMenu/src) | `v1.0.1` | `RhinoRepairMenu-1.0.1.zip` |
+| [Wreck Cleanup](WreckCleanup/README.md) | switches burnt-out wrecks off once the field holds enough of them, so they stop costing frames | [`WreckCleanup/src`](WreckCleanup/src) | `v1.0.1` | `RhinoWreckCleanup-1.0.1.zip` |
 
 All four are plain DLL mods: no AssetBundle, no game file is modified, uninstall by deleting one file.
+
+Repair Menu and Wreck Cleanup are also in the GHPC Mod Manager directory, so the manager can install them -
+see [manager/](manager/README.md).
 
 ## Requirements
 
@@ -64,70 +67,27 @@ be closed.
 
 ## Registering with GHPC Mod Manager
 
-The community directory at `GHPC.DMR.gg/config/modconfig.json` points each entry at a GitHub release.
-Because each mod here has its own tag, use the per-tag endpoint so the mods never shadow each other:
+The community directory is `GHPC.DMR.gg/config/modconfig.json` (source: `RoyZ-iwnl/GHPC-Mod-Manager-Web`,
+`config/modconfig.json` + `config/mod_i18n.json`; a PR merged there is what makes an entry visible). The
+paste-ready blocks live in [manager/](manager/README.md), which also explains the two mechanics that shape
+them - confirmed from the manager's own source, not guessed:
 
-```json
-{
-  "Id": "rhino2024-SlewReticle",
-  "Name": "Slew Reticle",
-  "Description": "War Thunder style exterior aiming: a fixed screen circle the turret slews to.",
-  "Tags": ["ui", "gunner"],
-  "SupportedGameVersions": ["Current"],
-  "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-mods/releases/tags/SlewReticle-v1.0.1",
-  "TargetFileNameKeyword": "SlewReticle",
-  "MainBinaryFileName": "SlewReticle.dll",
-  "ConfigSectionName": "SlewReticle",
-  "InstallMethod": "Manually"
-}
-```
+* `ReleaseUrl` is parsed only for the owner and repository name, and the installable version is the
+  repository's **newest** release, so the `/releases/tags/<tag>` tail makes no difference. One release
+  therefore has to carry the assets of every registered mod, and `TargetFileNameKeyword` keeps the two
+  entries from taking each other's zip.
+* `InstallMethod: "DirectRelease"` unpacks the zip straight into `<GameRoot>/Mods`, where GameRoot is the
+  game's `Bin` directory. The registered zips hold the dll flat at the root; the nested `GHPC-*.zip`
+  archives are only for copying by hand.
 
-```json
-{
-  "Id": "rhino2024-HitCam",
-  "Name": "Hit Cam",
-  "Description": "A short hit replay window in the corner, orbiting the struck vehicle with interior damage.",
-  "Tags": ["ui", "aar"],
-  "SupportedGameVersions": ["Current"],
-  "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-mods/releases/tags/HitCam-v1.0.1",
-  "TargetFileNameKeyword": "HitCam",
-  "MainBinaryFileName": "HitCam.dll",
-  "ConfigSectionName": "HitCam",
-  "InstallMethod": "Manually"
-}
-```
+`Conflicts` is left empty on purpose: it hard-fails the manager's launch check, and while `Repair Kit`
+covers similar ground it has never been tested against this mod, so the overlap is described in the entry
+text instead.
 
-```json
-{
-  "Id": "rhino2024-RepairMenu",
-  "Name": "Repair Menu",
-  "Description": "A Repair submenu in the game's own Q menu: pick the damaged chassis module and fix it, with a real repair time.",
-  "Tags": ["ui", "damage"],
-  "SupportedGameVersions": ["Current"],
-  "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-mods/releases/tags/RepairMenu-v1.0.0",
-  "TargetFileNameKeyword": "RepairMenu",
-  "MainBinaryFileName": "RepairMenu.dll",
-  "ConfigSectionName": "RepairMenu",
-  "InstallMethod": "Manually"
-}
-```
-
-```json
-{
-  "Id": "rhino2024-WreckCleanup",
-  "Name": "Wreck Cleanup",
-  "Description": "Switches burnt-out wrecks off once the field holds enough of them, so they stop costing frames.",
-  "Tags": ["performance"],
-  "SupportedGameVersions": ["Current"],
-  "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-mods/releases/tags/WreckCleanup-v1.0.0",
-  "TargetFileNameKeyword": "WreckCleanup",
-  "MainBinaryFileName": "WreckCleanup.dll",
-  "ConfigSectionName": "WreckCleanup",
-  "InstallMethod": "Manually"
-}
-```
-
-Bump the tag in the URL when you publish a new release, or the directory will keep offering the old one.
+Hit Cam and Slew Reticle are not registered yet - they overlap with `GHPC Combat Overhaul` (kill cam,
+War Thunder style HUD) on the same interior materials and cameras, and that pairing still needs testing
+before an entry can honestly declare conflicts. Registering them later means adding their zips to the same
+newest release, not publishing a separate one.
 
 ## Repository layout
 
@@ -140,6 +100,9 @@ RepairMenu/README.md
 RepairMenu/src/
 WreckCleanup/README.md
 WreckCleanup/src/
+manager/README.md       how the directory entry works, and the two JSON blocks to paste
+manager/modconfig-entries.json
+manager/mod_i18n-entries.json
 CHANGELOG.md
 LICENSE
 ```

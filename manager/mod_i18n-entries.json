@@ -1,0 +1,23 @@
+{
+  "RhinoRepairMenu": {
+    "ModId": "RhinoRepairMenu",
+    "ConfigLabels": {
+      "RepairSeconds": { "zh-CN": "维修总时长 (s)", "en-US": "Total repair budget (s)" },
+      "ShowProgress": { "zh-CN": "显示维修进度", "en-US": "Show repair progress" },
+      "DebugLog": { "zh-CN": "写调试日志", "en-US": "Write debug log" }
+    }
+  },
+  "RhinoWreckCleanup": {
+    "ModId": "RhinoWreckCleanup",
+    "ConfigLabels": {
+      "Enabled": { "zh-CN": "自动清理开关", "en-US": "Automatic cleanup on" },
+      "WreckThreshold": { "zh-CN": "触发清理的残骸数", "en-US": "Wreck count that triggers cleanup" },
+      "WreckDelay": { "zh-CN": "残骸燃烧判定 (s)", "en-US": "Wreck burn time before it counts (s)" },
+      "CheckInterval": { "zh-CN": "扫描间隔 (s)", "en-US": "Sweep interval (s)" },
+      "HideOnMap": { "zh-CN": "同时隐藏地图图标", "en-US": "Hide the tactical map icon too" },
+      "RestoreInAar": { "zh-CN": "战后报告期间还原", "en-US": "Restore during the after action report" },
+      "ToggleKey": { "zh-CN": "开关按键", "en-US": "Toggle key" },
+      "DebugLog": { "zh-CN": "写调试日志", "en-US": "Write debug log" }
+    }
+  }
+}
