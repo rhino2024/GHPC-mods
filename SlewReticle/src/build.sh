@@ -12,7 +12,7 @@ OUT="$SRC/bin"
 
 mkdir -p "$OUT"
 
-"$CSC" -nologo -noconfig -target:library -optimize+ -langversion:latest \
+"$CSC" -nologo -noconfig -target:library -optimize+ -langversion:latest -codepage:65001 \
   -out:"$OUT/SlewReticle.dll" \
   -r:System.dll \
   -r:System.Core.dll \
@@ -29,7 +29,8 @@ mkdir -p "$OUT"
   -r:"$MGD/UnityEngine.PhysicsModule.dll" \
   -r:"$MGD/UnityEngine.UI.dll" \
   -r:"$MGD/Assembly-CSharp.dll" \
-  "$SRC/SlewReticleMod.cs"
+  "$SRC/SlewReticleMod.cs" \
+  "$SRC/Patches.cs"
 
 if [ "$1" == "deploy" ]; then
   cp "$OUT/SlewReticle.dll" "$BIN/Mods/SlewReticle.dll"

@@ -1,4 +1,4 @@
-# Wreck Cleanup
+# 残骸清理 (`WreckCleanup`)
 
 Author **rhino2024** · MIT · part of the [GHPC-mods](../README.md) collection.
 

@@ -4,6 +4,16 @@ Tags are per mod for the source (`SlewReticle-v1.0.1`, `HitCam-v1.0.1`, `RepairM
 `WreckCleanup-v1.0.1`). The GHPC Mod Manager reads the repository's **newest** release, so that one release
 has to carry the zips of every registered mod - see [manager/README.md](manager/README.md).
 
+## 载具维修菜单 1.0.2 / 残骸清理 1.0.2 — 2026-10-22
+
+- **Names are Chinese now, everywhere.** The display name in `MelonInfo` and the preferences section title
+  are 载具维修菜单 and 残骸清理, and the directory entries put that Chinese text in both locale slots, so the
+  manager shows it whatever language the client runs in.
+- **No `Rhino` prefix any more.** The directory `Id`s, the asset keyword and the zip names are
+  `RepairMenu` / `WreckCleanup` and `GHPC-<mod>-1.0.2.zip`; `ConfigSectionName` and the DLL names are
+  unchanged, so an existing `[RepairMenu]` / `[WreckCleanup]` config section keeps being read.
+- Behaviour is otherwise identical to 1.0.1. The `MelonPreferences.cfg` section identifiers did not change.
+
 ## Repair Menu 1.0.1 — 2026-10-22
 
 - **The Repair submenu survives dying, crew changes and a new vehicle.** The game's `ContextMenuRoot` is a

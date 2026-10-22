@@ -12,7 +12,7 @@ OUT="$SRC/bin"
 
 mkdir -p "$OUT"
 
-"$CSC" -nologo -noconfig -target:library -optimize+ -langversion:latest \
+"$CSC" -nologo -noconfig -target:library -optimize+ -langversion:latest -codepage:65001 \
   -out:"$OUT/HitCam.dll" \
   -r:System.dll \
   -r:System.Core.dll \
@@ -28,9 +28,10 @@ mkdir -p "$OUT"
   -r:"$MGD/UnityEngine.PhysicsModule.dll" \
   -r:"$MGD/UnityEngine.ParticleSystemModule.dll" \
   -r:"$MGD/UnityEngine.VehiclesModule.dll" \
+  -r:"$MGD/UnityEngine.ImageConversionModule.dll" \
   -r:"$MGD/UnityEngine.UI.dll" \
   -r:"$MGD/Assembly-CSharp.dll" \
-  "$SRC/HitCamMod.cs" "$SRC/Patches.cs" "$SRC/AarProbe.cs" "$SRC/ReplaySession.cs"
+  "$SRC/HitCamMod.cs" "$SRC/Patches.cs" "$SRC/AarProbe.cs" "$SRC/Prerecorder.cs" "$SRC/ReplaySession.cs"
 
 if [ "$1" == "deploy" ]; then
   cp "$OUT/HitCam.dll" "$BIN/Mods/HitCam.dll"

@@ -1,4 +1,4 @@
-# Slew Reticle
+# 第三人称瞄准环 (`SlewReticle`)
 
 Author **rhino2024** · MIT · part of the [GHPC-mods](../README.md) collection.
 

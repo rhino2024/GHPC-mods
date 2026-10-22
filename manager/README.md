@@ -26,9 +26,11 @@ Confirmed from the manager's source, not guessed:
 So one repository cannot drive two entries with two separate releases: whichever one is newest would be
 the only one the other entry can reach, and its asset would not match the other keyword.
 **The newest release of this repository must carry every zip the directory references** - right now
-`RhinoRepairMenu-1.0.1.zip` and `RhinoWreckCleanup-1.0.1.zip` together in one release tagged `v1.0.1`.
-`TargetFileNameKeyword` is what keeps the two entries from taking each other's file, which is why the zip
-names are unique rather than plain `.zip`.
+`GHPC-RepairMenu-1.0.2.zip` and `GHPC-WreckCleanup-1.0.2.zip` together in one release tagged `v1.0.2`.
+`TargetFileNameKeyword` (`RepairMenu`, `WreckCleanup`) is what keeps the two entries from taking each other's
+file, which is why the zip names are unique rather than plain `.zip`. Only those two zips go into the newest
+release: `Contains` is a substring test, so an extra asset whose name also holds the keyword would make the
+choice depend on asset order.
 
 ## Zip layout
 
@@ -41,12 +43,20 @@ suits copy-it-yourself installs, and extracting those through the manager would 
 ## `Conflicts` is left empty on purpose
 
 A listed conflict makes the manager's launch check report **Failed** rather than warn. `Repair Kit` covers
-similar ground to Repair Menu, but the two have never been run against each other, so the overlap is
+similar ground to 载具维修菜单, but the two have never been run against each other, so the overlap is
 described in the entry text instead of asserted as a conflict.
+
+## Names are Chinese in both locale slots
+
+Every directory entry carries `Name` / `Description` as `{ "en-US", "zh-CN" }` and the manager picks one by
+client locale, so an empty slot shows as a blank row. Both slots of these two entries hold the same Chinese
+text - 载具维修菜单 and 残骸清理 - on purpose: the listing is what the author maintains, and the ASCII
+identifiers (`Id`, `TargetFileNameKeyword`, `MainBinaryFileName`, `ConfigSectionName`) stay English because
+they are matched against file names and the `MelonPreferences.cfg` section.
 
 ## Not registered yet
 
-Hit Cam and Slew Reticle overlap `GHPC Combat Overhaul` (X-ray kill cam, War Thunder style HUD) on the same
-interior materials and the same camera objects. Until that combination is actually tested, an entry for
-them could not honestly state whether it conflicts. Adding them later means putting their zips into the
-same newest release.
+命中回放小窗 (`HitCam`) and 第三人称瞄准环 (`SlewReticle`) overlap `GHPC Combat Overhaul` (X-ray kill cam,
+War Thunder style HUD) on the same interior materials and the same camera objects. Until that combination is
+actually tested, an entry for them could not honestly state whether it conflicts. Adding them later means
+putting their zips into the same newest release.

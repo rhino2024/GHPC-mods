@@ -12,7 +12,7 @@ OUT="$SRC/bin"
 
 mkdir -p "$OUT"
 
-"$CSC" -nologo -noconfig -target:library -optimize+ -langversion:latest \
+"$CSC" -nologo -noconfig -target:library -optimize+ -langversion:latest -codepage:65001 \
   -out:"$OUT/RepairMenu.dll" \
   -r:System.dll \
   -r:System.Core.dll \

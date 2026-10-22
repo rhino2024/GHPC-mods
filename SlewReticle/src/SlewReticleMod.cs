@@ -6,15 +6,17 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(SlewReticle.SlewReticleMod), "Slew Reticle", "1.0.1", "rhino2024")]
+[assembly: MelonInfo(typeof(SlewReticle.SlewReticleMod), "第三人称瞄准环", "1.0.4", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace SlewReticle
 {
     // War-Thunder style third person, automatic: whenever the game is in its exterior camera, a
-    // fixed circle sits in the middle of the screen and the turret is slewed to whatever that circle
-    // is over. Leaving the exterior view (or binoculars / free cam / the AAR) switches it off again.
-    // Commander view gets the slew without the circle, and holding Z or the mouse right button pulls
+    // fixed white circle sits in the middle of the screen, a second circle marks where the muzzle is
+    // actually pointing, and the turret is slewed to whatever the first circle is over. The exterior
+    // camera itself is parked at the turret instead of far behind the hull. Leaving the exterior view
+    // (or binoculars / free cam / the AAR) switches it off again.
+    // Commander view keeps the slew without the circles, and holding Z or the mouse right button pulls
     // the exterior view in through the game's own zoom steps.
     //
     // The whole thing runs through the live gameplay classes - GHPC.Player.PlayerInput,
@@ -27,21 +29,29 @@ namespace SlewReticle
         static MelonPreferences_Entry<KeyCode> eToggle, eZoomKey;
         static MelonPreferences_Entry<bool> eSlew, eRing, eDebugLog;
         static MelonPreferences_Entry<bool> eHideRingCommander, eZoomMouse;
+        static MelonPreferences_Entry<bool> eCamAtTurret, eShowGunRing;
         static MelonPreferences_Entry<float> eRingScale, eRingWidth, eAimDistance;
-        static MelonPreferences_Entry<float> eRingOffset;
-        static MelonPreferences_Entry<string> eRingColor;
+        static MelonPreferences_Entry<float> eRingOffset, eZoomExtra;
+        static MelonPreferences_Entry<float> eTurretBack, eTurretUp, eGunRingScale, eGunRingWidth;
+        static MelonPreferences_Entry<string> eRingColor, eGunRingColor;
 
         static bool featureOn = true;
         static bool activeNow;
         static Texture2D ringTexture;
+        static Texture2D gunRingTexture;
         static float ringPixelSize;
-        static string ringColorApplied;
-        static int ringScreenHeight;
+        static float gunRingPixelSize;
         static StreamWriter log;
+
+        // what the textures were last built from, so a rebuild only happens on a real change
+        static int builtScreenHeight;
+        static string builtRingColor, builtGunColor;
+        static float builtRingWidth, builtRingScale, builtGunWidth, builtGunScale;
 
         static Vector3 lastAimDir;
         static float reportTimer;
         static string lastHitLabel = "-";
+        static float lastHitDistance = -1f;
         static GHPC.Player.PlayerInput cachedInput;
         static bool inMission;
         static bool harvested;
@@ -51,6 +61,23 @@ namespace SlewReticle
         static float tuneSaveTimer;
         static bool commanderNow;
         static bool zoomHeld;
+        static SlewReticleMod self;
+        static string noticeText = "";
+        static float noticeTimer;
+
+        // the FOV boost is written into the live camera every frame, so the value the game itself asked
+        // for is remembered separately - writing back the boosted value would otherwise compound
+        static float zoomBaseFov;
+        static float zoomWrittenFov;
+
+        // the turret anchor is added onto wherever the game put the camera this frame, so the vehicle's
+        // own motion stays handled by its follow smoothing; only this offset is smoothed by the mod
+        static Vector3 anchorDelta;
+        static Vector3 anchorDeltaVel;
+        static bool anchorLive;
+        static GHPC.AimablePlatform anchorPlatform;
+        static bool anchorNotice;
+        static float camTuneSaveTimer;
 
         // switching crew sits the player in another seat, which makes the game hand the turret to
         // the gunner AI; these let the mod keep aim authority for as long as it is on
@@ -63,6 +90,11 @@ namespace SlewReticle
         static readonly FieldInfo SweepField =
             HarmonyLib.AccessTools.Field(typeof(GHPC.AI.GunnerAIController), "_sweepEnabled");
 
+        // the follow camera's own obstacle layer mask, reused for the turret anchor so the parked camera
+        // cannot end up inside a wall or under the ground
+        static readonly FieldInfo CollisionMaskField =
+            HarmonyLib.AccessTools.Field(typeof(GHPC.Camera.BufferedCameraFollow), "collisionMask");
+
         int lastSeat = int.MinValue;
         bool lastFullControl;
         GHPC.AI.UnitAI suppressedUnit;
@@ -73,18 +105,27 @@ namespace SlewReticle
 
         public override void OnInitializeMelon()
         {
-            cat = MelonPreferences.CreateCategory("SlewReticle", "Slew Reticle");
-            eToggle = cat.CreateEntry<KeyCode>("ToggleKey", KeyCode.G, "Turn the whole feature on or off; while on it follows the exterior view by itself");
+            self = this;
+            cat = MelonPreferences.CreateCategory("SlewReticle", "第三人称瞄准环");
+            eToggle = cat.CreateEntry<KeyCode>("ToggleKey", KeyCode.F7, "Turn the whole feature on or off; while on it follows the exterior view by itself. A notice flashes on screen whenever this key changes the state, so a stray press cannot silently kill the circle");
             eSlew = cat.CreateEntry<bool>("AutoSlew", true, "Slew the turret to whatever the screen centre ray hits");
             eRing = cat.CreateEntry<bool>("ShowRing", true, "Draw the fixed screen-centre circle");
             eRingScale = cat.CreateEntry<float>("RingScale", 0.055f, "Circle diameter as a fraction of screen height");
             eRingWidth = cat.CreateEntry<float>("RingWidth", 3f, "Circle line width in pixels");
-            eRingColor = cat.CreateEntry<string>("RingColor", "4DE673", "Circle colour, RRGGBB hex");
+            eRingColor = cat.CreateEntry<string>("RingColor", "FFFFFF", "Circle colour, RRGGBB hex");
             eAimDistance = cat.CreateEntry<float>("AimDistance", 2000f, "How far the centre ray reaches when it hits nothing");
             eRingOffset = cat.CreateEntry<float>("RingOffsetY", 0.18f, "Circle height above the true screen centre, as a fraction of screen height; the aim ray leaves from the circle. Nudge it live with Keypad + / -");
             eHideRingCommander = cat.CreateEntry<bool>("HideRingInCommander", true, "Commander view keeps the turret slew but draws no circle and aims from the true screen centre");
+            eShowGunRing = cat.CreateEntry<bool>("ShowGunRing", true, "Draw a second, smaller circle at the spot the muzzle is actually pointing at, so the turret still catching up is visible");
+            eGunRingScale = cat.CreateEntry<float>("GunRingScale", 0.032f, "Muzzle circle diameter as a fraction of screen height");
+            eGunRingWidth = cat.CreateEntry<float>("GunRingWidth", 2.5f, "Muzzle circle line width in pixels");
+            eGunRingColor = cat.CreateEntry<string>("GunRingColor", "FFFFFF", "Muzzle circle colour, RRGGBB hex");
+            eCamAtTurret = cat.CreateEntry<bool>("CameraAtTurret", true, "Holding the zoom key in third person parks the camera at the turret instead of behind the hull; releasing it, or leaving third person, gives the camera back to the game. The camera keeps the aim direction the game gave it, only its position moves. Tune it live: Keypad * / push it back and forward, Keypad 9 / 7 raise and lower it");
+            eTurretBack = cat.CreateEntry<float>("TurretBackDistance", 5f, "Metres behind the turret the third person camera sits when CameraAtTurret is on");
+            eTurretUp = cat.CreateEntry<float>("TurretUpHeight", 1.6f, "Metres above the turret the third person camera sits when CameraAtTurret is on");
             eZoomKey = cat.CreateEntry<KeyCode>("ZoomKey", KeyCode.Z, "Hold this to pull the exterior view in, release to go back to the base zoom");
             eZoomMouse = cat.CreateEntry<bool>("ZoomOnMouse", true, "The mouse right button does the same hold-to-zoom; turn this off if it clashes with a binding of your own");
+            eZoomExtra = cat.CreateEntry<float>("ZoomExtraFov", 0.4f, "Extra magnification on top of the game's own strongest exterior zoom, while the zoom key is held: the camera field of view is multiplied by this. 0.4 is 2.5 times as much magnification, 1 disables the extra step");
             eDebugLog = cat.CreateEntry<bool>("DebugLog", false, "Write the view / slew diagnostics to Bin/Mods/SlewReticle.debug.log; only turn this on when something is wrong");
 
             if (eDebugLog.Value) OpenLog();
@@ -102,11 +143,18 @@ namespace SlewReticle
                 Watch();
             }
             TuneRingOffset();
+            TuneCameraAnchor();
             if (Input.GetKeyDown(eToggle.Value))
             {
                 featureOn = !featureOn;
+                // the circle vanishing because of one stray key press reads as a bug, so say out loud
+                // on screen what the key just did
+                ShowNotice(featureOn
+                    ? "Slew Reticle ON (" + eToggle.Value + ")"
+                    : "Slew Reticle OFF - press " + eToggle.Value + " to bring the circle back");
                 Log("feature " + (featureOn ? "enabled" : "disabled"));
             }
+            if (noticeTimer > 0f) noticeTimer -= Time.unscaledDeltaTime;
 
             var pi = featureOn ? FindInput() : null;
             SetActive(pi);
@@ -116,7 +164,6 @@ namespace SlewReticle
 
             if (!activeNow) return;
             SyncRing();
-            if (eSlew.Value) Slew(pi);
             if (eDebugLog.Value) Report(pi);
         }
 
@@ -129,7 +176,14 @@ namespace SlewReticle
             harvested = false;
             // the follow camera of the old scene is gone, so the held zoom is simply forgotten
             zoomHeld = false;
+            zoomBaseFov = 0f;
+            zoomWrittenFov = 0f;
             commanderNow = false;
+            anchorLive = false;
+            anchorPlatform = null;
+            anchorDelta = Vector3.zero;
+            anchorDeltaVel = Vector3.zero;
+            lastHitDistance = -1f;
             inMission = !string.IsNullOrEmpty(sceneName)
                 && sceneName.IndexOf("Menu", StringComparison.OrdinalIgnoreCase) < 0
                 && sceneName.IndexOf("LOADER", StringComparison.OrdinalIgnoreCase) < 0;
@@ -148,11 +202,28 @@ namespace SlewReticle
 
             if (want == activeNow) return;
             activeNow = want;
-            if (want) { lastAimDir = Vector3.zero; reportTimer = 0f; SyncRing(); }
+            anchorLive = false;
+            anchorPlatform = null;
+            if (want)
+            {
+                lastAimDir = Vector3.zero;
+                reportTimer = 0f;
+                SyncRing();
+                if (eCamAtTurret.Value && !anchorNotice)
+                {
+                    anchorNotice = true;
+                    ShowNotice("Hold " + eZoomKey.Value + " / right mouse for the view from the turret"
+                        + " - Keypad * / back and forward, Keypad 9 / 7 up and down");
+                }
+            }
             else RestoreGunnerAI();
             Log("slew " + (want ? "ON" : "off") + " | " + LiveState(pi)
                 + (want ? " ring=" + (ringTexture != null ? ringTexture.width + "px" : "none")
-                    + " offsetY=" + eRingOffset.Value + " gunnerAI=" + AiState(pi) : ""));
+                    + " gunRing=" + (eShowGunRing.Value ? (gunRingTexture != null ? gunRingTexture.width + "px" : "none") : "off")
+                    + " offsetY=" + eRingOffset.Value
+                    + " camAtTurret=" + (eCamAtTurret.Value ? 1 : 0)
+                    + " back=" + eTurretBack.Value.ToString("0.0") + "m up=" + eTurretUp.Value.ToString("0.0") + "m"
+                    + " gunnerAI=" + AiState(pi) : ""));
         }
 
         // "switch crew member" is not a camera action: SwitchRoles only moves the player to another
@@ -328,35 +399,91 @@ namespace SlewReticle
             }
         }
 
-        void Slew(GHPC.Player.PlayerInput pi)
+        // Aim authority has to be taken after the game has aimed: PlayerInput::Update writes the FCS
+        // aim from the follow camera's forward vector every frame and the turret only slews later, in
+        // AimablePlatform::LateUpdate. So this runs as a postfix on that Update (Patches.cs) and hands
+        // over through the setter the player's own mouse path uses - SetAimPosition, the old write here,
+        // is the AI-only setter whose result the game then overwrote, which is what put the shots beside
+        // the circle instead of on it.
+        internal static void ApplyAimFromPatch(GHPC.Player.PlayerInput pi)
         {
+            var mod = self;
+            if (mod != null) mod.ApplyAim(pi);
+        }
+
+        void ApplyAim(GHPC.Player.PlayerInput pi)
+        {
+            if (!activeNow || !eSlew.Value) return;
+
             var cam = MainCam();
             if (cam == null || !cam.isActiveAndEnabled) return;
-
-            var centre = AimPixel();
-            var ray = cam.ScreenPointToRay(centre);
-            float far = Mathf.Clamp(eAimDistance.Value, 50f, 4000f);
-
-            RaycastHit hit;
-            Vector3 point;
-            if (Physics.Raycast(ray, out hit, far) && !OwnVehicle(hit.transform))
-            {
-                point = hit.point;
-                lastHitLabel = hit.transform.name + " " + hit.distance.ToString("0") + "m";
-            }
-            else
-            {
-                point = cam.transform.position + ray.direction * far;
-                lastHitLabel = "sky";
-            }
 
             var module = WeaponsModule(pi);
             var info = SafeWeapon(pi);
             if (module == null || info == null) return;
 
-            lastAimDir = (point - cam.transform.position).normalized;
-            try { module.SetAimPosition(info.Role, point); }
-            catch (Exception e) { Log("SetAimPosition threw: " + e.Message); }
+            var ray = cam.ScreenPointToRay(AimPixel());
+            float far = Mathf.Clamp(eAimDistance.Value, 50f, 4000f);
+
+            RaycastHit hit;
+            Vector3 direction;
+            if (Physics.Raycast(ray, out hit, far) && !OwnVehicle(hit.transform))
+            {
+                direction = hit.point - cam.transform.position;
+                lastHitLabel = hit.transform.name + " " + hit.distance.ToString("0") + "m";
+                lastHitDistance = hit.distance;
+            }
+            else
+            {
+                direction = ray.direction;
+                lastHitLabel = "sky";
+                lastHitDistance = -1f;
+            }
+            if (direction.sqrMagnitude < 0.0001f) return;
+
+            lastAimDir = direction.normalized;
+            try
+            {
+                // the fire control normalizes this and takes the range from its own laser channel, so
+                // a unit direction is exactly the shape the game's third person path passes over
+                module.SetAimVector(info.Role, lastAimDir, true);
+                if (info.Weapon != null) module.NotifyAimOverride(info.Role);
+            }
+            catch (Exception e) { Log("aim write threw: " + e.Message); }
+        }
+
+        internal static void ShowNotice(string text)
+        {
+            noticeText = text;
+            noticeTimer = 2.5f;
+        }
+
+        // The game sets the exterior camera FOV from its zoom steps in event handlers only, so a boost
+        // written once would be undone by the next of those - and a boost written every frame straight
+        // onto the live camera would compound onto itself. Both are avoided by keeping the game's own
+        // value separately and re-deriving from it whenever the game has changed it underneath us.
+        internal static void ApplyExtraZoom(Camera cam)
+        {
+            if (cam == null) return;
+
+            float extra = Mathf.Clamp(eZoomExtra != null ? eZoomExtra.Value : 1f, 0.05f, 1f);
+            bool boost = zoomHeld && extra < 0.999f;
+            float current = cam.fieldOfView;
+
+            if (!boost)
+            {
+                if (zoomWrittenFov <= 0f) return;
+                // only take back what we put there; if the game has written its own FOV since, leave it
+                if (Mathf.Abs(current - zoomWrittenFov) < 0.01f) cam.fieldOfView = zoomBaseFov;
+                zoomWrittenFov = 0f;
+                zoomBaseFov = 0f;
+                return;
+            }
+
+            if (zoomWrittenFov <= 0f || Mathf.Abs(current - zoomWrittenFov) >= 0.01f) zoomBaseFov = current;
+            float want = Mathf.Max(1f, zoomBaseFov * extra);
+            cam.fieldOfView = want;
+            zoomWrittenFov = want;
         }
 
         // the follow camera sits behind the hull, so the centre ray can clip our own vehicle; aiming
@@ -402,7 +529,154 @@ namespace SlewReticle
                 var gun = platform.AimVector;
                 if (gun.sqrMagnitude > 0.0001f) err = Vector3.Angle(gun.normalized, lastAimDir);
             }
-            Log("slew: gun-vs-centre error " + err.ToString("0.0") + " deg, centre hits " + lastHitLabel);
+            var cam = MainCam();
+            string ring = "-";
+            if (cam != null)
+            {
+                Vector2 sp;
+                ring = GunAimScreenPoint(cam, out sp)
+                    ? sp.x.ToString("0") + "," + sp.y.ToString("0")
+                    : "off screen";
+            }
+            Log("slew: gun-vs-centre error " + err.ToString("0.0") + " deg, centre hits " + lastHitLabel
+                + ", muzzle ring at " + ring
+                + ", camera " + (anchorLive && anchorPlatform != null
+                    ? "at turret " + anchorPlatform.Name
+                    : zoomHeld ? "turret wanted, no platform" : "the game's own")
+                + (anchorLive ? " offset " + anchorDelta.ToString("F1") : ""));
+        }
+
+        // The turret spot is the zoom view: it engages while the hold-to-zoom key is down in third
+        // person, and the game gets its camera straight back on release. Leaving third person has to
+        // hand the position back at once rather than glide, because first person drives this same
+        // camera transform and a fading offset would keep pushing it after the switch.
+        internal static void AnchorCamera(GHPC.Camera.BufferedCameraFollow follow, Camera cam)
+        {
+            bool wantAnchor = eCamAtTurret.Value && activeNow && !commanderNow && zoomHeld;
+            if (cam == null || !wantAnchor)
+            {
+                // released the key while still in third person: ease the offset out so the view does
+                // not jump back to the hull in one frame
+                if (anchorLive && activeNow && eCamAtTurret.Value && !commanderNow)
+                {
+                    anchorDelta = Vector3.SmoothDamp(anchorDelta, Vector3.zero, ref anchorDeltaVel,
+                        0.12f, 60f, Time.unscaledDeltaTime);
+                    if (anchorDelta.sqrMagnitude > 0.0004f)
+                    {
+                        cam.transform.position += anchorDelta;
+                        return;
+                    }
+                }
+                anchorLive = false;
+                anchorDelta = Vector3.zero;
+                anchorDeltaVel = Vector3.zero;
+                return;
+            }
+
+            var platform = Platform(cachedInput);
+            var pivot = platform != null ? platform.Transform : null;
+            if (pivot == null)
+            {
+                anchorLive = false;
+                return;
+            }
+
+            float back = Mathf.Clamp(eTurretBack.Value, 1.5f, 30f);
+            float up = Mathf.Clamp(eTurretUp.Value, -1f, 10f);
+            Vector3 forward = cam.transform.forward;
+            Vector3 want = pivot.position - forward * back + Vector3.up * up;
+            want = KeepClearOfObstacles(follow, pivot.position, want);
+
+            Vector3 gamePos = cam.transform.position;
+            // pitching the view down aims the spot under the ground, and the game's own collision pass
+            // already ran against the hull anchor, so nothing else catches it: never sit the lens below
+            // where the game chose to put it this frame, nor under the turret itself
+            float floorY = Mathf.Max(gamePos.y, pivot.position.y - 1.5f) - 0.6f;
+            if (want.y < floorY) want.y = floorY;
+
+            Vector3 delta = want - gamePos;
+
+            // a cut rather than a glide on the first frame, another vehicle, or a teleport
+            if (!anchorLive || platform != anchorPlatform || delta.sqrMagnitude > 400f)
+            {
+                anchorDelta = delta;
+                anchorDeltaVel = Vector3.zero;
+                anchorLive = true;
+                anchorPlatform = platform;
+            }
+            else
+            {
+                anchorDelta = Vector3.SmoothDamp(anchorDelta, delta, ref anchorDeltaVel, 0.12f, 60f,
+                    Time.unscaledDeltaTime);
+            }
+
+            cam.transform.position = gamePos + anchorDelta;
+        }
+
+        // the game's own collision pass runs before this, against the hull anchor, so the turret spot is
+        // checked again with the same layer mask - pulled short rather than left inside a wall
+        static Vector3 KeepClearOfObstacles(GHPC.Camera.BufferedCameraFollow follow, Vector3 from, Vector3 to)
+        {
+            if (follow == null || CollisionMaskField == null) return to;
+            Vector3 dir = to - from;
+            float len = dir.magnitude;
+            if (len < 0.5f) return to;
+            dir /= len;
+
+            int mask;
+            try
+            {
+                var layerMask = (LayerMask)CollisionMaskField.GetValue(follow);
+                mask = layerMask.value;
+            }
+            catch { return to; }
+            if (mask == 0) return to;
+
+            RaycastHit hit;
+            try
+            {
+                if (!Physics.Raycast(from, dir, out hit, len, mask)) return to;
+            }
+            catch { return to; }
+            return hit.point - dir * 0.4f;
+        }
+
+        // how far the camera sits from the turret is only judgeable on screen, so nudge it live the same
+        // way the circle height is
+        void TuneCameraAnchor()
+        {
+            if (eTurretBack == null || eTurretUp == null) return;
+
+            float dBack = 0f, dUp = 0f;
+            try
+            {
+                if (Input.GetKey(KeyCode.KeypadMultiply)) dBack = Time.unscaledDeltaTime * 4f;
+                else if (Input.GetKey(KeyCode.KeypadDivide)) dBack = -Time.unscaledDeltaTime * 4f;
+                if (Input.GetKey(KeyCode.Keypad9)) dUp = Time.unscaledDeltaTime * 2.5f;
+                else if (Input.GetKey(KeyCode.Keypad7)) dUp = -Time.unscaledDeltaTime * 2.5f;
+            }
+            catch { }
+            if (dBack == 0f && dUp == 0f) return;
+
+            bool changed = false;
+            if (dBack != 0f)
+            {
+                float next = Mathf.Clamp(eTurretBack.Value + dBack, 1.5f, 30f);
+                if (Mathf.Abs(next - eTurretBack.Value) > 0.0005f) { eTurretBack.Value = next; changed = true; }
+            }
+            if (dUp != 0f)
+            {
+                float next = Mathf.Clamp(eTurretUp.Value + dUp, -1f, 10f);
+                if (Mathf.Abs(next - eTurretUp.Value) > 0.0005f) { eTurretUp.Value = next; changed = true; }
+            }
+            if (!changed) return;
+
+            camTuneSaveTimer -= Time.unscaledDeltaTime;
+            if (camTuneSaveTimer > 0f) return;
+            camTuneSaveTimer = 1f;
+            Log("camera anchor: back " + eTurretBack.Value.ToString("0.00")
+                + " m, up " + eTurretUp.Value.ToString("0.00") + " m");
+            try { cat.SaveToFile(false); } catch (Exception e) { Log("saving the anchor threw: " + e.Message); }
         }
 
         // ---------------------------------------------------------------- live object access
@@ -674,8 +948,17 @@ namespace SlewReticle
             sb.Append(" camMgr=").Append(cm != null ? 1 : 0)
                 .Append(" follow=").Append(follow != null ? 1 : 0)
                 .Append(" cmd=").Append(CommanderMode() ? 1 : 0)
-                .Append(" cam=").Append(cam != null ? cam.name : "-")
-                .Append(" root=").Append(PlayerRoot() != null ? PlayerRoot().name : "-");
+                .Append(" cam=").Append(cam != null ? cam.name : "-");
+            // where the lens actually is when the view changes hands: the report about first person
+            // sitting under the ground can only be chased down from the position itself
+            if (cam != null)
+                sb.Append(" camPos=").Append(cam.transform.position.ToString("F1"))
+                    .Append(" camParent=").Append(cam.transform.parent != null
+                        ? cam.transform.parent.name : "-")
+                    .Append(" camOn=").Append(cam.gameObject.activeInHierarchy ? 1 : 0);
+            var unitRoot = PlayerRoot();
+            sb.Append(" root=").Append(unitRoot != null ? unitRoot.name : "-")
+                .Append(" unitPos=").Append(unitRoot != null ? unitRoot.position.ToString("F1") : "-");
             sb.Append(" av=").Append(UnityEngine.Object.FindObjectsOfType<GHPC.AarVisual>().Length);
             return sb.ToString();
         }
@@ -742,39 +1025,64 @@ namespace SlewReticle
 
         void SyncRing()
         {
-            if (!eRing.Value) return;
-            if (ringColorApplied != eRingColor.Value || ringScreenHeight != Screen.height)
+            int h = Screen.height;
+            bool resized = h != builtScreenHeight;
+
+            // built one to one with the pixels it will be drawn at, so RingWidth really is the line
+            // thickness on screen instead of a texture-space number that shrinks with the circle
+            float ringD = Mathf.Max(16f, Mathf.Clamp(eRingScale.Value, 0.005f, 0.4f) * h);
+            float gunD = Mathf.Max(12f, Mathf.Clamp(eGunRingScale.Value, 0.005f, 0.4f) * h);
+            float ringW = Mathf.Clamp(eRingWidth.Value, 1f, 20f);
+            float gunW = Mathf.Clamp(eGunRingWidth.Value, 1f, 20f);
+
+            if (eRing.Value && (resized || ringTexture == null || ringD != builtRingScale
+                || ringW != builtRingWidth || eRingColor.Value != builtRingColor))
             {
-                ringColorApplied = eRingColor.Value;
-                ringScreenHeight = Screen.height;
-                RebuildRing();
+                ringPixelSize = ringD;
+                builtRingScale = ringD;
+                builtRingWidth = ringW;
+                builtRingColor = eRingColor.Value;
+                if (ringTexture != null) UnityEngine.Object.Destroy(ringTexture);
+                ringTexture = CreateRingTexture(Mathf.RoundToInt(ringD), ringW, ParseColor(builtRingColor));
+                Log("circle rebuilt: " + ringTexture.width + " px, line " + ringW.ToString("0.0")
+                    + " px, colour " + builtRingColor);
             }
+
+            if (eShowGunRing.Value && (resized || gunRingTexture == null || gunD != builtGunScale
+                || gunW != builtGunWidth || eGunRingColor.Value != builtGunColor))
+            {
+                gunRingPixelSize = gunD;
+                builtGunScale = gunD;
+                builtGunWidth = gunW;
+                builtGunColor = eGunRingColor.Value;
+                if (gunRingTexture != null) UnityEngine.Object.Destroy(gunRingTexture);
+                gunRingTexture = CreateRingTexture(Mathf.RoundToInt(gunD), gunW, ParseColor(builtGunColor));
+            }
+
+            builtScreenHeight = h;
         }
 
-        void RebuildRing()
+        static Color ParseColor(string hex)
         {
             Color color;
-            if (!ColorUtility.TryParseHtmlString("#" + eRingColor.Value, out color)) color = Color.green;
-            float width = Mathf.Clamp(eRingWidth.Value, 1f, 20f);
-
-            if (ringTexture != null) UnityEngine.Object.Destroy(ringTexture);
-            ringTexture = CreateRingTexture(256, width, color);
-            Log("ring texture rebuilt: " + ringTexture.width + " px, colour " + eRingColor.Value);
+            if (!ColorUtility.TryParseHtmlString("#" + hex, out color)) color = Color.white;
+            return color;
         }
 
+        // a plain ring with a centre dot, which is what the third person aim circle looks like in the
+        // game this is modelled on
         static Texture2D CreateRingTexture(int size, float widthPx, Color color)
         {
+            size = Mathf.Max(12, size);
             var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
             tex.wrapMode = TextureWrapMode.Clamp;
-            tex.filterMode = FilterMode.Trilinear;
+            tex.filterMode = FilterMode.Bilinear;
 
             float r = size * 0.5f;
-            float outer = r - 2f;
-            float inner = outer - widthPx;
-            float aa = 1.4f;
-            float tickLength = outer * 0.34f;
-            float tickHalf = widthPx * 0.6f;
-            float dotRadius = Mathf.Max(1.6f, widthPx * 0.7f);
+            float outer = r - 1f;
+            float inner = outer - Mathf.Max(1f, widthPx);
+            float aa = 1.1f;
+            float dot = Mathf.Max(1.1f, widthPx * 0.6f);
 
             var pixels = new Color32[size * size];
 
@@ -787,13 +1095,7 @@ namespace SlewReticle
                     float d = Mathf.Sqrt(dx * dx + dy * dy);
 
                     float a = Mathf.Clamp01((d - inner) / aa + 0.5f) * Mathf.Clamp01((outer - d) / aa + 0.5f);
-
-                    // four inward ticks on the axes, like a gunner's reticle
-                    float angle = Mathf.Atan2(dy, dx);
-                    float nearestAxis = Mathf.Round(angle / (Mathf.PI * 0.5f)) * (Mathf.PI * 0.5f);
-                    float arcOffset = Mathf.Abs(angle - nearestAxis) * d;
-                    if (arcOffset <= tickHalf && d <= inner && d >= inner - tickLength) a = 1f;
-                    if (d <= dotRadius) a = 1f;
+                    if (d <= dot) a = 1f;
 
                     var c = color;
                     c.a *= Mathf.Clamp01(a);
@@ -806,10 +1108,51 @@ namespace SlewReticle
             return tex;
         }
 
-        void ResizeRing()
+        // Where the barrel really points, in Unity screen pixels. Taken from the muzzle position the gun
+        // fires from plus the platform's aim vector, projected at the same distance the centre circle is
+        // hitting - so the gap to the aim circle is the turret still catching up, or the lead.
+        static bool GunAimScreenPoint(Camera cam, out Vector2 screen)
         {
-            float px = Mathf.Clamp(eRingScale.Value, 0.005f, 0.4f) * Screen.height;
-            ringPixelSize = Mathf.Max(16f, px);
+            screen = Vector2.zero;
+            if (cam == null || !eShowGunRing.Value) return false;
+
+            var info = SafeWeapon(cachedInput);
+            var platform = Platform(cachedInput);
+
+            Vector3 dir = Vector3.zero;
+            try { if (platform != null) dir = platform.AimVector; } catch { dir = Vector3.zero; }
+
+            var muzzle = Muzzle(info);
+            if (dir.sqrMagnitude < 0.0001f)
+            {
+                try { if (muzzle != null) dir = muzzle.forward; } catch { dir = Vector3.zero; }
+            }
+            if (dir.sqrMagnitude < 0.0001f) return false;
+            dir = dir.normalized;
+
+            Vector3 origin;
+            if (muzzle != null) origin = muzzle.position;
+            else if (platform != null && platform.Transform != null) origin = platform.Transform.position;
+            else origin = cam.transform.position;
+
+            float dist = lastHitDistance > 1f
+                ? Mathf.Clamp(lastHitDistance, 25f, 2000f)
+                : Mathf.Clamp(eAimDistance.Value * 0.25f, 100f, 1000f);
+
+            var sp = cam.WorldToScreenPoint(origin + dir * dist);
+            if (sp.z <= 0.05f) return false;
+            screen = new Vector2(sp.x, sp.y);
+            return true;
+        }
+
+        static Transform Muzzle(GHPC.Weapons.WeaponSystemInfo info)
+        {
+            try
+            {
+                var weapon = info != null ? info.Weapon : null;
+                return weapon != null ? weapon.MuzzleIdentity : null;
+            }
+            catch { return null; }
         }
 
         // In both exterior views the follow camera puts our own hull across the true screen centre, so
@@ -865,16 +1208,49 @@ namespace SlewReticle
         // the mission scene load, which is why the circle was invisible
         public override void OnGUI()
         {
-            if (!activeNow || !eRing.Value || ringTexture == null) return;
-            if (eHideRingCommander.Value && commanderNow) return;
-
             var matrix = GUI.matrix;
             GUI.matrix = Matrix4x4.identity;
-            ResizeRing();
-            var px = RingPixel();
-            GUI.DrawTexture(new Rect(px.x - ringPixelSize * 0.5f,
-                Screen.height - px.y - ringPixelSize * 0.5f, ringPixelSize, ringPixelSize), ringTexture);
+            DrawNotice();
+            if (activeNow && eRing.Value && ringTexture != null
+                && !(eHideRingCommander.Value && commanderNow))
+            {
+                var px = RingPixel();
+                GUI.DrawTexture(new Rect(px.x - ringPixelSize * 0.5f,
+                    Screen.height - px.y - ringPixelSize * 0.5f, ringPixelSize, ringPixelSize), ringTexture);
+            }
+            if (activeNow && gunRingTexture != null)
+            {
+                var cam = MainCam();
+                Vector2 sp;
+                if (GunAimScreenPoint(cam, out sp)
+                    && sp.x > -40f && sp.y > -40f
+                    && sp.x < Screen.width + 40f && sp.y < Screen.height + 40f)
+                {
+                    GUI.DrawTexture(new Rect(sp.x - gunRingPixelSize * 0.5f,
+                        Screen.height - sp.y - gunRingPixelSize * 0.5f,
+                        gunRingPixelSize, gunRingPixelSize), gunRingTexture);
+                }
+            }
             GUI.matrix = matrix;
+        }
+
+        static GUIStyle noticeStyle;
+
+        // the toggle has to announce itself: a circle that silently stops being drawn reads as a crash
+        static void DrawNotice()
+        {
+            if (noticeTimer <= 0f || string.IsNullOrEmpty(noticeText)) return;
+            if (noticeStyle == null)
+            {
+                noticeStyle = new GUIStyle(GUI.skin.label);
+                noticeStyle.fontSize = 16;
+                noticeStyle.alignment = TextAnchor.MiddleCenter;
+            }
+
+            var old = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, Mathf.Clamp01(noticeTimer * 1.5f));
+            GUI.Label(new Rect(0f, Screen.height * 0.07f, Screen.width, 28f), noticeText, noticeStyle);
+            GUI.color = old;
         }
 
         // ---------------------------------------------------------------- plumbing

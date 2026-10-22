@@ -13,7 +13,7 @@ using NWH.VehiclePhysics;
 using UnityEngine;
 using UnityEngine.Events;
 
-[assembly: MelonInfo(typeof(RepairMenu.RepairMenuMod), "Repair Menu", "1.0.1", "rhino2024")]
+[assembly: MelonInfo(typeof(RepairMenu.RepairMenuMod), "载具维修菜单", "1.0.2", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace RepairMenu
@@ -102,7 +102,7 @@ namespace RepairMenu
 
         public override void OnInitializeMelon()
         {
-            cat = MelonPreferences.CreateCategory("RepairMenu", "Repair Menu");
+            cat = MelonPreferences.CreateCategory("RepairMenu", "载具维修菜单");
             eRepairSeconds = cat.CreateEntry<float>("RepairSeconds", 30f,
                 "How long repairing every module takes; one module costs its share of that. Set 0 for an instant fix");
             eShowProgress = cat.CreateEntry<bool>("ShowProgress", true,

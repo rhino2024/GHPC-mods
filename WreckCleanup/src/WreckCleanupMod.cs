@@ -5,7 +5,7 @@ using System.Text;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(WreckCleanup.WreckCleanupMod), "Wreck Cleanup", "1.0.1", "rhino2024")]
+[assembly: MelonInfo(typeof(WreckCleanup.WreckCleanupMod), "残骸清理", "1.0.2", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace WreckCleanup
@@ -40,7 +40,7 @@ namespace WreckCleanup
 
         public override void OnInitializeMelon()
         {
-            cat = MelonPreferences.CreateCategory("WreckCleanup", "Wreck Cleanup");
+            cat = MelonPreferences.CreateCategory("WreckCleanup", "残骸清理");
             eEnabled = cat.CreateEntry<bool>("Enabled", true, "Clean up automatically once the field holds enough wrecks");
             eThreshold = cat.CreateEntry<int>("WreckThreshold", 3, "How many vehicle wrecks have to be on the field before they are cleared");
             eWreckDelay = cat.CreateEntry<float>("WreckDelay", 8f, "A wreck has to burn this long before it counts as clearable, so the kill is still watchable");

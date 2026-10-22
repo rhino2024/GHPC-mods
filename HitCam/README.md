@@ -1,4 +1,4 @@
-# Hit Cam
+# 命中回放小窗 (`HitCam`)
 
 Author **rhino2024** · MIT · part of the [GHPC-mods](../README.md) collection.
 

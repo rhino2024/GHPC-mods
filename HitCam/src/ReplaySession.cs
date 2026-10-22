@@ -42,6 +42,17 @@ namespace HitCam
         readonly Camera xrayCamera;
         readonly RenderTexture texture;
         GameObject uiRoot;
+        RawImage picture;
+        Text captionText;
+
+        Prerecorder.Recording preRoll;
+        int preIndex;
+        float preClock;
+
+        readonly List<TintGroup> tints = new List<TintGroup>();
+        int tintedGroups;
+        int crewGroups;
+        bool colourPropertyFound = true;
 
         readonly List<VisualState> states = new List<VisualState>();
         readonly List<GameObject> suppressedTraces = new List<GameObject>();
@@ -69,28 +80,44 @@ namespace HitCam
 
             texture = new RenderTexture(HitCamMod.WindowWidth, HitCamMod.WindowHeight, 24);
             texture.antiAliasing = 1;
+            texture.Create();
             int live = LiveViewMask();
+            int surface = SurfaceMask();
 
             // exactly the two-pass stack the game builds for its own AAR: the world pass draws
             // everything the player can already see, the second pass clears only the depth buffer
             // and paints the AAR layer over it. That is why the AAR looks see-through without the
             // hull ever becoming transparent - and why no exterior renderer has to be touched
             cameraRoot = new GameObject("HitCam_ReplayCamera");
-            replayCamera = AddCamera(cameraRoot, CameraClearFlags.SolidColor, live, 100f);
+            replayCamera = AddCamera(cameraRoot, CameraClearFlags.SolidColor, surface, 100f);
 
             xrayRoot = new GameObject("HitCam_XrayCamera");
             xrayRoot.transform.SetParent(cameraRoot.transform, false);
             xrayCamera = AddCamera(xrayRoot, CameraClearFlags.Depth, InteriorMask(), 101f);
 
             BuildVictimFraming(victim);
+            // a short far plane is the layer-free way to lose the neighbouring tanks and the distant
+            // scenery: they share the vehicle's own layers, so the culling mask cannot separate them
+            float far = Mathf.Clamp(radius * 3f + 30f, 45f, 300f);
+            replayCamera.farClipPlane = far;
+            xrayCamera.farClipPlane = far;
             AimCamera();
             SweepLiveTraces();
             CreateTraces(victim);
             if (!HitCamMod.ShowFlightPath) SuppressFlightPath();
             if (HitCamMod.ShowInterior) CollectVisuals(victim, live);
+            int preserved = HitCamMod.BlackBackground ? PreserveVehicleArt() : 0;
             // lit once for the whole window rather than twice per frame
             ApplyVisuals();
+            BuildTints();
             BuildUi();
+            StartPreRoll();
+            PrimeFirstFrame();
+
+            HitCamMod.Log("background: player camera " + live + " minus environment, far "
+                + far.ToString("0") + "m, drawn mask " + surface + ", " + preserved
+                + " hull renderers moved off Default");
+            LogNearbyLayers();
         }
 
         Camera AddCamera(GameObject root, CameraClearFlags clear, int mask, float depth)
@@ -178,6 +205,8 @@ namespace HitCam
         void CollectVisuals(IUnit victim, int liveMask)
         {
             var roots = InteriorRoots(victim);
+            artRoots.Clear();
+            for (int i = 0; i < roots.Count; i++) artRoots.Add(roots[i]);
             var seen = new HashSet<AarVisual>();
             interiorLayers = (1 << XrayLayer()) | (1 << AarLayer());
 
@@ -329,6 +358,63 @@ namespace HitCam
             moved.Clear();
         }
 
+        // measured from this window's own layer histogram: a struck unit's hull, turret, gun and
+        // wheel art sits on Default(0) - the very layer a map also scatters its bushes on - while
+        // Main Body(14) holds no renderer at all around a vehicle. So switching Default off to lose
+        // the grass erases the target with it. The way to have both is to step the victim's own art
+        // onto Main Body for the length of the window: that layer is inside the player camera's mask
+        // too, so the live view never notices the move, and RestoreLayers puts it back on close.
+        // Only the vehicle's own visual roots are walked - a scene wide sweep by position used to
+        // pick up spall clouds and tracer cylinders as well, and those came along as armour.
+        int PreserveVehicleArt()
+        {
+            int target = MainBodyLayer();
+            if (target < 0) return 0;
+
+            var roots = new List<Transform>();
+            AddFollowRoot(roots, pivot);
+            for (int i = 0; i < artRoots.Count; i++) AddFollowRoot(roots, artRoots[i]);
+            for (int i = 0; i < states.Count; i++)
+                if (states[i].Visual != null) AddFollowRoot(roots, states[i].Visual.transform);
+
+            int count = 0;
+            for (int i = 0; i < roots.Count; i++)
+                count += StepOffDefault(roots[i].GetComponentsInChildren<Renderer>(true), target);
+            return count;
+        }
+
+        void AddFollowRoot(List<Transform> roots, Transform t)
+        {
+            var root = FollowRootOf(t);
+            if (root != null && !roots.Contains(root)) roots.Add(root);
+        }
+
+        // the unit's own hierarchy is proof enough; everything else found in the scene has to sit
+        // inside the struck hull's box, so a bush two metres away is never mistaken for armour
+        int StepOffDefault(Renderer[] found, int target)
+        {
+            int count = 0;
+            int stuck = 0;
+            for (int i = 0; i < found.Length; i++)
+            {
+                var renderer = found[i];
+                if (renderer == null || !renderer.enabled) continue;
+                if (renderer is ParticleSystemRenderer) continue;
+                var gameObject = renderer.gameObject;
+                if (gameObject.layer != 0 || !gameObject.activeInHierarchy) continue;
+                if (!moved.Add(renderer)) continue;
+                // a collider carrier decides what an incoming round can strike, so it stays put
+                if (gameObject.GetComponent<Collider>() != null) { stuck++; continue; }
+                layerMoves.Add(new LayerMove { Object = gameObject, Layer = 0 });
+                gameObject.layer = target;
+                count++;
+            }
+            if (count > 0 || stuck > 0)
+                HitCamMod.Log("hull art: " + count + " renderers off Default onto layer " + target
+                    + ", " + stuck + " left in place (collider carrier)");
+            return count;
+        }
+
         static int CountOn(Renderer[] renderers)
         {
             int n = 0;
@@ -344,6 +430,7 @@ namespace HitCam
         }
 
         readonly List<LayerMove> layerMoves = new List<LayerMove>();
+        readonly List<Transform> artRoots = new List<Transform>();
         readonly HashSet<Renderer> moved = new HashSet<Renderer>();
         int movedLayers;
         int stuckLayers;
@@ -572,14 +659,90 @@ namespace HitCam
             return cam != null ? cam.cullingMask : ~0;
         }
 
+        // what the world pass of the window is allowed to draw - the recorder camera uses the same
+        // answer, so the pre-roll and the live view are cut from the same cloth
+        internal static int SurfaceMask()
+        {
+            int live = LiveViewMask();
+            return HitCamMod.BlackBackground ? live & ~EnvironmentMask() : live;
+        }
+
+        // The layers that carry the battlefield rather than a vehicle. Default is the one that
+        // matters: a GHPC map scatters its bushes and trees about as plain objects on Default, and
+        // a first attempt that only switched off Vegetation(3), Terrain(18) and Sky(27) still showed
+        // grass, since the terrain's own layer was already off and the props were not. Switching off
+        // Default loses nothing of the target either - the vehicle is Main Body(14) and its interior
+        // art is stepped onto Xray Only(21) for the length of the window by PushToXrayLayer.
+        static readonly int[] EnvironmentLayerNumbers = { 0, 3, 4, 5, 16, 18, 25, 26, 27 };
+
+        static int EnvironmentMask()
+        {
+            int mask = 0;
+            for (int i = 0; i < EnvironmentLayerNumbers.Length; i++)
+                mask |= 1 << EnvironmentLayerNumbers[i];
+            return mask;
+        }
+
+        // once per window: which layers the map actually puts around the target. This is how a
+        // guess about where the foliage lives is checked against a map that was never measured.
+        void LogNearbyLayers()
+        {
+            if (!HitCamMod.DebugLogging) return;
+            var counts = new Dictionary<int, int>();
+            var sample = new Dictionary<int, string>();
+            Renderer[] all;
+            try { all = GameObject.FindObjectsOfType<Renderer>(); }
+            catch { return; }
+
+            float reach = radius + 12f;
+            float reachSquared = reach * reach;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var renderer = all[i];
+                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy) continue;
+                Vector3 center;
+                try { center = renderer.bounds.center; }
+                catch { continue; }
+                if ((center - centre).sqrMagnitude > reachSquared) continue;
+
+                int layer = renderer.gameObject.layer;
+                int seen;
+                counts.TryGetValue(layer, out seen);
+                counts[layer] = seen + 1;
+                if (seen == 0)
+                {
+                    var parent = renderer.transform.parent;
+                    sample[layer] = renderer.name + (parent != null ? " <" + parent.name + ">" : "");
+                }
+            }
+
+            var builder = new StringBuilder("nearby layers within " + reach.ToString("0") + "m: ");
+            foreach (var pair in counts)
+            {
+                int layer = pair.Key;
+                bool drawn = (SurfaceMask() & (1 << layer)) != 0;
+                builder.Append(LayerMask.LayerToName(layer)).Append('(').Append(layer).Append(")x")
+                    .Append(pair.Value).Append(drawn ? "[drawn] " : " ");
+            }
+            foreach (var pair in sample)
+                if ((SurfaceMask() & (1 << pair.Key)) != 0)
+                    builder.Append(" | on ").Append(LayerMask.LayerToName(pair.Key)).Append(" e.g. ").Append(pair.Value);
+            HitCamMod.Log(builder.ToString());
+        }
+
+        static int MainBodyLayer()
+        {
+            int layer = LayerMask.NameToLayer("Main Body");
+            return layer >= 0 && layer < 32 ? layer : 14;
+        }
+
         static int AarLayer()
         {
             var manager = ConstantsAndInfoManager.Instance;
             return manager != null && manager.AarLayer > 0 ? manager.AarLayer : 15;
         }
 
-        static int XrayLayer()
-        {
+        static int XrayLayer()        {
             var manager = ConstantsAndInfoManager.Instance;
             return manager != null ? manager.XrayOnlyLayer : 21;
         }
@@ -618,6 +781,27 @@ namespace HitCam
             HitCamMod.Log("traces added: " + createdTraces.Count + " [" + names + "]"
                 + (createdTraces.Count > 0 ? " layer " + createdTraces[0].layer : ""));
             MoveToXrayLayer();
+            AttachTracesToVictim();
+        }
+
+        // the traces are built in world space at the moment of the strike while the battle keeps
+        // running, so a target that is still driving away leaves its own flight lines behind and the
+        // window shows a vehicle with stray marks hanging in the air where it used to be. The
+        // game's AAR can freeze the mission here; we may not touch timeScale, so instead the lines
+        // are hung off the victim and travel with it. Only the short impact legs survive this - the
+        // long flight line is switched off by SuppressFlightPath.
+        void AttachTracesToVictim()
+        {
+            if (pivot == null) return;
+            int attached = 0;
+            for (int i = 0; i < createdTraces.Count; i++)
+            {
+                var go = createdTraces[i];
+                if (go == null) continue;
+                go.transform.SetParent(pivot, true);
+                attached++;
+            }
+            HitCamMod.Log("traces parented to victim " + pivot.name + " (" + attached + ")");
         }
 
         // the traces land on the AAR layer, which the player's camera renders, so the world view
@@ -742,10 +926,13 @@ namespace HitCam
             int width = HitCamMod.WindowWidth;
             int height = HitCamMod.WindowHeight;
 
-            var picture = AddGraphic<RawImage>(margin, margin, width, height);
+            picture = AddGraphic<RawImage>(margin, margin, width, height);
             picture.texture = texture;
             picture.color = Color.white;
             picture.raycastTarget = false;
+            // a RawImage with nothing in its texture yet is exactly the white block the window used
+            // to open with, so the picture only appears once a real frame is in the texture
+            picture.enabled = false;
 
             if (!HitCamMod.ShowInfoText) return;
 
@@ -760,19 +947,19 @@ namespace HitCam
 
             var caption = BuildCaption();
             var lines = caption.Split('\n');
-            var text = AddGraphic<Text>(margin, margin + height + 4, width, 20 * lines.Length);
-            text.font = font;
-            text.text = caption;
-            text.alignment = TextAnchor.UpperCenter;
-            text.fontSize = 15;
-            text.lineSpacing = 1.15f;
-            text.color = Color.white;
-            text.raycastTarget = false;
-            text.horizontalOverflow = HorizontalWrapMode.Wrap;
-            text.verticalOverflow = VerticalWrapMode.Overflow;
-            text.resizeTextForBestFit = true;
-            text.resizeTextMinSize = 9;
-            text.resizeTextMaxSize = 15;
+            captionText = AddGraphic<Text>(margin, margin + height + 4, width, 20 * lines.Length);
+            captionText.font = font;
+            captionText.text = caption;
+            captionText.alignment = TextAnchor.UpperCenter;
+            captionText.fontSize = 15;
+            captionText.lineSpacing = 1.15f;
+            captionText.color = Color.white;
+            captionText.raycastTarget = false;
+            captionText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            captionText.verticalOverflow = VerticalWrapMode.Overflow;
+            captionText.resizeTextForBestFit = true;
+            captionText.resizeTextMinSize = 9;
+            captionText.resizeTextMaxSize = 15;
             HitCamMod.Log("caption: " + caption.Replace("\n", "  //  "));
         }
 
@@ -844,12 +1031,16 @@ namespace HitCam
             labels.Add(label);
         }
 
-        // returns true once the window is done and should be torn down
+        // returns false once the window is done and the caller may tear it down
         // the shot terminates a beat before the game cuts to the AAR screen, so aborting on
         // InAar used to kill the window before its first frame was ever on screen
         public bool Update(float deltaTime)
         {
-            if (pivot == null) return true;
+            if (pivot == null) return false;
+
+            // the recorded flight is shown first and spends none of the live seconds, so the window
+            // keeps its full Duration of after-effects after the shell has struck
+            if (preRoll != null) { PlayPreRoll(deltaTime); return true; }
 
             elapsed += deltaTime;
             // once the game cuts to its own AAR the after-effects are on the full screen anyway,
@@ -858,7 +1049,7 @@ namespace HitCam
             if (frames > 0 && SafeInAar())
             {
                 HitCamMod.Log("AAR took over after " + frames + " frames, window handed back");
-                return true;
+                return false;
             }
             // a heartbeat proves whether the game was still running frames while the window was
             // open, which is the only way to tell our own stall from anybody else's afterwards
@@ -868,23 +1059,535 @@ namespace HitCam
                     + " visuals=" + states.Count);
                 lastBeat = elapsed;
             }
-            if (elapsed >= HitCamMod.Duration) return true;
+            if (elapsed >= HitCamMod.Duration) return false;
 
             // the window is a second full-scene render; 30 Hz is smooth enough for a slow orbit
             // and stops the extra draw work from scaling with the game's frame rate
             renderClock += deltaTime;
-            if (frames > 0 && renderClock < RenderInterval * 0.95f) return false;
+            if (frames > 0 && renderClock < RenderInterval * 0.95f) return true;
             yaw += HitCamMod.OrbitSpeed * renderClock;
             renderClock = 0f;
             AimCamera();
             RenderFrame();
-            return false;
+            return true;
         }
 
         static bool SafeInAar()
         {
             try { return AarController.InAar; }
             catch { return false; }
+        }
+
+        void StartPreRoll()
+        {
+            if (!HitCamMod.PreRollOn) return;
+            preRoll = Prerecorder.Claim(shot);
+            if (preRoll == null || preRoll.Textures == null || preRoll.Order == null) { preRoll = null; return; }
+
+            // the damage report would give the ending away before the shell has even arrived
+            if (captionText != null) captionText.enabled = false;
+            preIndex = 0;
+            // primed so the first recorded frame is on screen straight away instead of a beat later
+            preClock = 1f / Mathf.Clamp(HitCamMod.PreRollPlayFps, 1f, 60f);
+            HitCamMod.Log("prerec: " + preRoll.Order.Length + " frames queued, played at "
+                + HitCamMod.PreRollPlayFps.ToString("0") + " fps");
+        }
+
+        void PlayPreRoll(float deltaTime)
+        {
+            float step = 1f / Mathf.Clamp(HitCamMod.PreRollPlayFps, 1f, 60f);
+            preClock += deltaTime;
+            if (preClock < step) return;
+            preClock = preClock % step;
+
+            RenderTexture source = null;
+            if (preIndex < preRoll.Order.Length)
+            {
+                int slot = preRoll.Order[preIndex];
+                if (slot >= 0 && slot < preRoll.Textures.Length) source = preRoll.Textures[slot];
+            }
+            preIndex++;
+            if (source == null) { EndPreRoll(); return; }
+
+            try
+            {
+                Graphics.Blit(source, texture);
+                ShowWindow();
+                if (preIndex == 2) DumpTexture(source, "a_recorded_mid");
+            }
+            catch (Exception e)
+            {
+                HitCamMod.Log("prerec blit threw: " + e.Message);
+                EndPreRoll();
+            }
+        }
+
+        void EndPreRoll()
+        {
+            HitCamMod.Log("prerec: " + preIndex + " frames shown, switching to the live view");
+            Prerecorder.Release(preRoll);
+            preRoll = null;
+            if (captionText != null) captionText.enabled = true;
+            renderClock = 0f;
+        }
+
+        // War Thunder colours the X-ray view by what is left of each module. The game has no such
+        // mapping - AarVisual only swaps in one authored material per piece - so the health is read
+        // from the DestructibleComponent the piece hangs under and painted onto a private copy of
+        // that material, which leaves the game's own AAR colours untouched.
+        sealed class TintGroup
+        {
+            public bool Ready;
+            public GHPC.Equipment.DestructibleComponent Module;
+            public GHPC.Humans.IHuman Crew;
+            public readonly List<Renderer> Renderers = new List<Renderer>();
+            public readonly List<Material[]> Copies = new List<Material[]>();
+        }
+
+        static readonly FieldInfo CrewMembersList =
+            AccessTools.Field(typeof(GHPC.Crew.CrewManager), "CrewMembers");
+
+        void BuildTints()
+        {
+            if (!HitCamMod.TintByHealth) return;
+
+            var unresolved = new List<AarVisual>();
+            for (int i = 0; i < states.Count; i++)
+            {
+                var visual = states[i].Visual;
+                if (visual == null) continue;
+                var module = NearestModule(visual.transform);
+                if (module == null) { unresolved.Add(visual); continue; }
+                AddToGroup(module, visual);
+            }
+
+            if (unresolved.Count > 0) ResolveByReverseWalk(unresolved);
+
+            foreach (var group in byModule.Values) tints.Add(group);
+            tintedGroups = tints.Count;
+            if (unresolved.Count > 0) ResolveCrewVisuals(unresolved);
+
+            var names = new StringBuilder();
+            for (int i = 0; i < tints.Count && i < 5; i++)
+                names.Append(tintName(tints[i])).Append(' ');
+            HitCamMod.Log("health colour: " + tintedGroups + " modules plus " + crewGroups
+                + " crew over " + states.Count + " visuals, " + unresolved.Count
+                + " found no owner, first [" + names + "]");
+        }
+
+        static string tintName(TintGroup group)
+        {
+            if (group.Module != null) return group.Module.name;
+            if (group.Crew != null) return "crew";
+            return "?";
+        }
+
+        readonly Dictionary<GHPC.Equipment.DestructibleComponent, TintGroup> byModule =
+            new Dictionary<GHPC.Equipment.DestructibleComponent, TintGroup>();
+
+        void AddToGroup(GHPC.Equipment.DestructibleComponent module, AarVisual visual)
+        {
+            TintGroup group;
+            if (!byModule.TryGetValue(module, out group))
+            {
+                group = new TintGroup { Module = module };
+                byModule.Add(module, group);
+            }
+
+            var renderers = RenderersOf(visual);
+            for (int r = 0; r < renderers.Length; r++)
+                if (renderers[r] != null && !group.Renderers.Contains(renderers[r]))
+                    group.Renderers.Add(renderers[r]);
+        }
+
+        // the art does not always hang *under* its module - the crew bodies and some racks sit next
+        // to the component that owns them - so ask every module what it contains and let the
+        // deepest one win, otherwise the hull would claim the whole vehicle
+        void ResolveByReverseWalk(List<AarVisual> unresolved)
+        {
+            var roots = new List<Transform>();
+            if (pivot != null) roots.Add(pivot);
+            var frames = shot.AllShotFrames;
+            if (frames != null)
+                for (int i = 0; i < frames.Count; i++)
+                    AddRoot(roots, frames[i].HitArmor);
+
+            var chosen = new Dictionary<AarVisual, GHPC.Equipment.DestructibleComponent>();
+            for (int r = 0; r < roots.Count; r++)
+            {
+                if (roots[r] == null) continue;
+                var modules = roots[r].GetComponentsInChildren<GHPC.Equipment.DestructibleComponent>(true);
+                for (int m = 0; m < modules.Length; m++)
+                {
+                    var module = modules[m];
+                    if (module == null) continue;
+                    var visuals = module.GetComponentsInChildren<AarVisual>(true);
+                    for (int v = 0; v < visuals.Length; v++)
+                    {
+                        var visual = visuals[v];
+                        if (visual == null || !unresolved.Contains(visual)) continue;
+                        GHPC.Equipment.DestructibleComponent existing;
+                        if (chosen.TryGetValue(visual, out existing))
+                        {
+                            if (existing == module) continue;
+                            // only a module inside the one already found may take the piece over
+                            if (!module.transform.IsChildOf(existing.transform)) continue;
+                        }
+                        chosen[visual] = module;
+                    }
+                }
+            }
+
+            foreach (var pair in chosen) AddToGroup(pair.Value, pair.Key);
+            foreach (var visual in chosen.Keys) unresolved.Remove(visual);
+            HitCamMod.Log("health colour: " + chosen.Count + " pieces matched by their module subtree");
+        }
+
+        // crew bodies sit outside every DestructibleComponent; the game joins a crewman to his art
+        // through CrewManager.CrewMembers[].AllAarVisuals, which is a plain object array
+        void ResolveCrewVisuals(List<AarVisual> unresolved)
+        {
+            if (pivot == null || CrewMembersList == null) return;
+            GHPC.Crew.CrewManager[] managers;
+            try { managers = pivot.GetComponentsInChildren<GHPC.Crew.CrewManager>(true); }
+            catch { return; }
+
+            int pieces = 0;
+            for (int i = 0; i < managers.Length && unresolved.Count > 0; i++)
+            {
+                Array members;
+                try { members = CrewMembersList.GetValue(managers[i]) as Array; }
+                catch { continue; }
+                if (members == null) continue;
+
+                for (int m = 0; m < members.Length; m++)
+                {
+                    var member = members.GetValue(m);
+                    if (member == null) continue;
+                    var visuals = ReadObjectField<AarVisual[]>(member, "AllAarVisuals");
+                    var human = ReadObjectField<GHPC.Humans.IHuman>(member, "Human");
+                    if (visuals == null || human == null) continue;
+
+                    bool took = false;
+                    for (int v = 0; v < visuals.Length; v++)
+                    {
+                        var visual = visuals[v];
+                        if (visual == null || !unresolved.Remove(visual)) continue;
+                        AddCrewGroup(human, visual);
+                        took = true;
+                        pieces++;
+                    }
+                    if (took) crewGroups++;
+                }
+            }
+            HitCamMod.Log("health colour: " + pieces + " crew pieces over " + crewGroups + " crewmen");
+        }
+
+        static T ReadObjectField<T>(object target, string name) where T : class
+        {
+            try
+            {
+                var field = AccessTools.Field(target.GetType(), name);
+                return field == null ? null : field.GetValue(target) as T;
+            }
+            catch { return null; }
+        }
+
+        void AddCrewGroup(GHPC.Humans.IHuman human, AarVisual visual)
+        {
+            TintGroup group = null;
+            for (int i = 0; i < tints.Count; i++)
+                if (tints[i].Crew == human) { group = tints[i]; break; }
+            if (group == null)
+            {
+                group = new TintGroup { Crew = human };
+                tints.Add(group);
+            }
+
+            var renderers = RenderersOf(visual);
+            for (int r = 0; r < renderers.Length; r++)
+                if (renderers[r] != null && !group.Renderers.Contains(renderers[r]))
+                    group.Renderers.Add(renderers[r]);
+        }
+
+        // a crewman has no percentage, the game grades him in five steps
+        static float CrewHealthFraction(GHPC.Humans.IHuman human)
+        {
+            // the dead are the case the player is looking for, and a killed human has been seen to
+            // still report a graded status rather than Dead
+            try { if (human.IsDead) return 0f; } catch { }
+            switch (human.GetOverallStatus())
+            {
+                case GHPC.Humans.HealthStatus.Dead: return 0f;
+                case GHPC.Humans.HealthStatus.Critical: return 0.1f;
+                case GHPC.Humans.HealthStatus.HeavilyWounded: return 0.25f;
+                case GHPC.Humans.HealthStatus.Wounded: return 0.45f;
+                default: return 1f;
+            }
+        }
+
+        // the module and its art are only joined by the transform hierarchy (measured: AarVisual has
+        // no back-reference to what it draws), so the nearest DestructibleComponent above it is it
+        static GHPC.Equipment.DestructibleComponent NearestModule(Transform t)
+        {
+            var walk = t;
+            int hops = 0;
+            while (walk != null && hops < 12)
+            {
+                var module = walk.GetComponent<GHPC.Equipment.DestructibleComponent>();
+                if (module != null) return module;
+                walk = walk.parent;
+                hops++;
+            }
+            return null;
+        }
+
+        void ApplyTint()
+        {
+            if (tints.Count == 0) return;
+            for (int i = 0; i < tints.Count; i++)
+            {
+                var group = tints[i];
+                float percent;
+                if (group.Module != null)
+                {
+                    try { percent = Mathf.Clamp01(group.Module.HealthPercent * 0.01f); }
+                    catch { continue; }
+                }
+                else if (group.Crew != null)
+                {
+                    try { percent = CrewHealthFraction(group.Crew); }
+                    catch { continue; }
+                }
+                else continue;
+
+                if (!group.Ready && !CopyMaterials(group)) continue;
+                var colour = HealthColour(percent);
+
+                for (int r = 0; r < group.Renderers.Count; r++)
+                {
+                    var renderer = group.Renderers[r];
+                    var copies = group.Copies[r];
+                    if (renderer == null || copies == null) continue;
+                    for (int m = 0; m < copies.Length; m++)
+                        if (copies[m] != null) SetColour(copies[m], colour);
+
+                    // the game's own updateMaterials writes the originals back whenever it re-lights
+                    // a piece; putting our array back is what keeps the colour on screen
+                    if (copies.Length > 0 && copies[0] != null && renderer.sharedMaterial != copies[0])
+                        renderer.sharedMaterials = copies;
+                }
+            }
+        }
+
+        bool CopyMaterials(TintGroup group)
+        {
+            for (int r = 0; r < group.Renderers.Count; r++)
+            {
+                var renderer = group.Renderers[r];
+                Material[] copies = null;
+                if (renderer != null)
+                {
+                    try
+                    {
+                        var source = renderer.sharedMaterials;
+                        if (source != null && source.Length > 0)
+                        {
+                            copies = new Material[source.Length];
+                            for (int i = 0; i < source.Length; i++)
+                            {
+                                if (source[i] == null) continue;
+                                var copy = new Material(source[i]);
+                                tintMaterials.Add(copy);
+                                copies[i] = copy;
+                                if (group.Crew != null) DescribeCrewMaterial(source[i], copy);
+                            }
+                            renderer.sharedMaterials = copies;
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        if (tintedFailures++ == 0) HitCamMod.Log("health colour: copy threw: " + e.Message);
+                    }
+                }
+                group.Copies.Add(copies);
+            }
+            group.Ready = true;
+            return group.Copies.Count > 0;
+        }
+
+        static readonly string[] ColourProperties = {
+            "_Color", "_BaseColor", "BaseColor", "_Tint", "Tint", "_TintColor", "_EmissionColor"
+        };
+
+        readonly List<Material> tintMaterials = new List<Material>();
+        int tintedFailures;
+        bool crewMaterialLogged;
+
+        // one property is not enough: the art sets differ and each reads its colour from wherever it
+        // likes, and on a dark body mesh _Color alone is a multiplication of nearly nothing, which
+        // is why a killed crewman used to stay the same shade. Every knob the material has is turned
+        // instead, and emission - which needs its keyword on - is the one that actually shows.
+        void SetColour(Material material, Color colour)
+        {
+            bool any = false;
+            for (int i = 0; i < ColourProperties.Length; i++)
+            {
+                string name = ColourProperties[i];
+                if (!material.HasProperty(name)) continue;
+                if (name == "_EmissionColor")
+                {
+                    // a glow reads on a mesh whose own texture is nearly black, where a plain
+                    // multiplication of _Color is invisible - so the emission is driven harder
+                    material.SetColor(name, new Color(
+                        Mathf.Clamp01(colour.r * 1.7f), Mathf.Clamp01(colour.g * 1.7f),
+                        Mathf.Clamp01(colour.b * 1.7f), 1f));
+                    try { material.EnableKeyword("_EMISSION"); } catch { }
+                }
+                else material.SetColor(name, colour);
+                any = true;
+            }
+            if (material.HasProperty("_Color")) material.color = colour;
+            if (any) return;
+
+            if (colourPropertyFound)
+            {
+                colourPropertyFound = false;
+                HitCamMod.Log("health colour: no colour property on the AAR material, tinting off");
+            }
+        }
+
+        // what the crew's material actually is, logged once: without this the choice between
+        // _Color, _TintColor and _EmissionColor is a guess
+        void DescribeCrewMaterial(Material source, Material copy)
+        {
+            if (crewMaterialLogged || source == null) return;
+            crewMaterialLogged = true;
+            var builder = new StringBuilder("crew material: " + source.name + " shader ");
+            try { builder.Append(source.shader != null ? source.shader.name : "none"); }
+            catch { builder.Append("?"); }
+            try
+            {
+                builder.Append(" | copy props:");
+                if (copy == null) { builder.Append(" none"); }
+                else
+                {
+                    for (int i = 0; i < ColourProperties.Length; i++)
+                        if (copy.HasProperty(ColourProperties[i]))
+                            builder.Append(' ').Append(ColourProperties[i]).Append('=')
+                                .Append(copy.GetColor(ColourProperties[i]).ToString("F2"));
+                }
+            }
+            catch { builder.Append(" (unreadable)"); }
+            HitCamMod.Log(builder.ToString());
+        }
+
+        static readonly float[] HealthStops = { 0f, 0.12f, 0.3f, 0.55f, 0.78f, 1f };
+        static readonly Color[] HealthRamp = {
+            new Color(0.04f, 0.005f, 0.005f, 1f),   // nothing left: black with a red core
+            new Color(0.28f, 0.012f, 0.012f, 1f),
+            new Color(0.78f, 0.05f, 0.04f, 1f),     // red
+            new Color(0.94f, 0.44f, 0.04f, 1f),     // orange
+            new Color(0.86f, 0.86f, 0.10f, 1f),     // yellow
+            new Color(0.12f, 0.72f, 0.18f, 1f),     // whole: green
+        };
+
+        static Color HealthColour(float t)
+        {
+            t = Mathf.Clamp01(t);
+            for (int i = 1; i < HealthStops.Length; i++)
+            {
+                if (t > HealthStops[i]) continue;
+                float k = (t - HealthStops[i - 1]) / (HealthStops[i] - HealthStops[i - 1]);
+                return Color.Lerp(HealthRamp[i - 1], HealthRamp[i], Mathf.Clamp01(k));
+            }
+            return HealthRamp[HealthRamp.Length - 1];
+        }
+
+        void DestroyTints()
+        {
+            for (int i = 0; i < tintMaterials.Count; i++)
+                if (tintMaterials[i] != null) UnityEngine.Object.Destroy(tintMaterials[i]);
+            tintMaterials.Clear();
+            tints.Clear();
+        }
+
+        // a freshly created RenderTexture holds uninitialised memory and the canvas already shows it
+        // during the frame the window is built in, which is the white beat before the first real
+        // image. Fill it here instead: the first recorded frame if there is a pre-roll, otherwise one
+        // live render straight away.
+        void PrimeFirstFrame()
+        {
+            if (preRoll == null) { ShowLive(); return; }
+            try
+            {
+                if (preRoll.Order == null || preRoll.Order.Length == 0
+                    || preRoll.Textures == null || preRoll.Textures.Length == 0)
+                {
+                    ShowLive();
+                    return;
+                }
+                int slot = preRoll.Order[0];
+                if (slot < 0 || slot >= preRoll.Textures.Length || preRoll.Textures[slot] == null)
+                {
+                    ShowLive();
+                    return;
+                }
+                DumpTexture(preRoll.Textures[slot], "a_recorded");
+                Graphics.Blit(preRoll.Textures[slot], texture);
+                ShowWindow();
+                DumpTexture(texture, "b_window");
+            }
+            catch (Exception e)
+            {
+                HitCamMod.Log("first frame skipped: " + e.Message);
+            }
+        }
+
+        void ShowWindow()
+        {
+            if (picture != null) picture.enabled = true;
+        }
+
+        // no pre-roll to show: one live render right away, so the window never opens on an empty
+        // texture
+        void ShowLive()
+        {
+            RenderFrame();
+            ShowWindow();
+            DumpTexture(texture, "c_live");
+        }
+
+        // debug builds only: write the actual pixels out so the complaint about a white window can be
+        // answered from the picture rather than from guesses. A handful of files per mission is enough
+        // to tell a white recording from a white UI.
+        static int dumpsLeft = 9;
+
+        void DumpTexture(RenderTexture source, string tag)
+        {
+            if (!HitCamMod.DebugLogging || source == null || dumpsLeft <= 0) return;
+            dumpsLeft--;
+            try
+            {
+                var tex = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+                var previous = RenderTexture.active;
+                RenderTexture.active = source;
+                tex.ReadPixels(new Rect(0, 0, source.width, source.height), 0, 0);
+                tex.Apply();
+                RenderTexture.active = previous;
+                byte[] bytes = tex.EncodeToPNG();
+                UnityEngine.Object.Destroy(tex);
+                if (bytes == null || bytes.Length == 0) return;
+                string directory = System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(UnityEngine.Application.dataPath), "Mods");
+                string path = System.IO.Path.Combine(directory, "HitCam.frame" + dumpsLeft + "." + tag + ".png");
+                System.IO.File.WriteAllBytes(path, bytes);
+                HitCamMod.Log("frame written: " + path + " (" + bytes.Length + " B)");
+            }
+            catch (Exception e)
+            {
+                HitCamMod.Log("frame write failed: " + e.Message);
+            }
         }
 
         void RenderFrame()
@@ -894,6 +1597,9 @@ namespace HitCam
             // thing in this design that can stall the main thread
             try
             {
+                // the damage keeps spreading while the window is open, so the colour is re-read for
+                // every rendered frame rather than fixed at open
+                ApplyTint();
                 float t0 = Time.realtimeSinceStartup;
                 replayCamera.Render();
                 xrayCamera.Render();
@@ -940,8 +1646,10 @@ namespace HitCam
             {
                 HitCamMod.Log("window done: " + frames + " frames, worst render "
                     + worstRenderMs.ToString("0.0") + " ms, " + states.Count + " visuals lit");
+                if (preRoll != null) { Prerecorder.Release(preRoll); preRoll = null; }
                 RestoreVisuals();
                 RestoreLayers();
+                DestroyTints();
 
                 if (uiRoot != null) UnityEngine.Object.Destroy(uiRoot);
                 if (cameraRoot != null) UnityEngine.Object.Destroy(cameraRoot);

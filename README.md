@@ -6,14 +6,14 @@ Each mod is packaged and released separately — take only the one you want.
 
 | mod | what it adds | source | release tag | download |
 | --- | --- | --- | --- | --- |
-| [Slew Reticle](SlewReticle/README.md) | War Thunder style exterior aiming: a fixed screen circle that the turret slews to, hold-to-zoom, commander view slews without the circle | [`SlewReticle/src`](SlewReticle/src) | `SlewReticle-v1.0.1` | `GHPC-SlewReticle-1.0.1.zip` |
-| [Hit Cam](HitCam/README.md) | a hit replay window in the corner for a few seconds after your shell lands, orbiting the struck vehicle with its interior damage | [`HitCam/src`](HitCam/src) | `HitCam-v1.0.1` | `GHPC-HitCam-1.0.1.zip` |
-| [Repair Menu](RepairMenu/README.md) | a Repair submenu inside the game's own Q menu: pick the damaged module to fix, and the work takes real time | [`RepairMenu/src`](RepairMenu/src) | `v1.0.1` | `RhinoRepairMenu-1.0.1.zip` |
-| [Wreck Cleanup](WreckCleanup/README.md) | switches burnt-out wrecks off once the field holds enough of them, so they stop costing frames | [`WreckCleanup/src`](WreckCleanup/src) | `v1.0.1` | `RhinoWreckCleanup-1.0.1.zip` |
+| [第三人称瞄准环](SlewReticle/README.md) (`SlewReticle`) | War Thunder style exterior aiming: a fixed screen circle that the turret slews to, hold-to-zoom, commander view slews without the circle | [`SlewReticle/src`](SlewReticle/src) | `SlewReticle-v1.0.1` | `GHPC-SlewReticle-1.0.1.zip` |
+| [命中回放小窗](HitCam/README.md) (`HitCam`) | a hit replay window in the corner for a few seconds after your shell lands, orbiting the struck vehicle with its interior damage | [`HitCam/src`](HitCam/src) | `HitCam-v1.0.1` | `GHPC-HitCam-1.0.1.zip` |
+| [载具维修菜单](RepairMenu/README.md) (`RepairMenu`) | a Repair submenu inside the game's own Q menu: pick the damaged module to fix, and the work takes real time | [`RepairMenu/src`](RepairMenu/src) | `v1.0.2` | `GHPC-RepairMenu-1.0.2.zip` |
+| [残骸清理](WreckCleanup/README.md) (`WreckCleanup`) | switches burnt-out wrecks off once the field holds enough of them, so they stop costing frames | [`WreckCleanup/src`](WreckCleanup/src) | `v1.0.2` | `GHPC-WreckCleanup-1.0.2.zip` |
 
 All four are plain DLL mods: no AssetBundle, no game file is modified, uninstall by deleting one file.
 
-Repair Menu and Wreck Cleanup are also in the GHPC Mod Manager directory, so the manager can install them -
+载具维修菜单 and 残骸清理 are also in the GHPC Mod Manager directory, so the manager can install them -
 see [manager/](manager/README.md).
 
 ## Requirements
@@ -39,10 +39,10 @@ see [manager/](manager/README.md).
 
 | | what to remember |
 | --- | --- |
-| Slew Reticle | on in any exterior view; `G` kill switch, hold `Z` or the mouse right button to zoom, `Keypad +/-` move the circle live; commander view has no circle but still slews |
-| Hit Cam | on after your shell hits something; `F9` toggle, `F10` debug dump (needs `DebugLog`) |
-| Repair Menu | press the game's own `Q`, open `Repair`; a full repair costs `RepairSeconds` (30 s default), one module costs its share |
-| Wreck Cleanup | automatic once `WreckThreshold` (3 default) wrecks are on the field, after they have burned `WreckDelay` (8 s); `F8` toggle |
+| 第三人称瞄准环 | on in any exterior view; `F7` kill switch, hold `Z` or the mouse right button to zoom and the lens moves to the turret (release it and the game's own camera is handed back), `Keypad +/-` move the circle live; commander view has no circle but still slews |
+| 命中回放小窗 | on after your shell hits something; `F9` toggle, `F10` debug dump (needs `DebugLog`) |
+| 载具维修菜单 | press the game's own `Q`, open `Repair`; a full repair costs `RepairSeconds` (30 s default), one module costs its share |
+| 残骸清理 | automatic once `WreckThreshold` (3 default) wrecks are on the field, after they have burned `WreckDelay` (8 s); `F8` toggle |
 
 None of them write anything to disk unless you set `DebugLog = true` in its config section.
 
