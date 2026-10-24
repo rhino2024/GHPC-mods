@@ -1,48 +1,54 @@
 [
   {
     "Id": "RepairMenu",
+    "Author": "rhino2024",
     "Name": {
-      "en-US": "载具维修菜单",
+      "en-US": "Vehicle Repair Menu",
       "zh-CN": "载具维修菜单"
     },
     "Description": {
-      "en-US": "在游戏原生 Q 键上下文菜单里加入 Repair 子菜单，自己点要修哪个模块，而不是一次全修：发动机、变速箱、散热器、左履带、右履带。每个菜单项标着自己的耗时，五项合计 30 秒（发动机 8、变速箱 8、散热器 4、每条履带 5）；RepairSeconds 设为 0 就是立刻修完。\n\n读条期间该模块血量线性回升，屏幕底部显示剩余秒数，再次点击可取消并保留已修好的部分。倒计时结束后才清游戏内部的损坏标志、重启发动机、恢复被弄坏之前的变速箱挡位类型、重新供电并点亮炮塔平台；只有发动机和两条履带最终都健康时才会解除底盘 broken 标志与手刹——所以只修散热器不会把瘫痪的车变成能开的。\n\n不修外观凹陷、不复活乘员、不加弹药。\n\n需要 MelonLoader。在 0.1.0-alpha+20261014 版本实测。\n\n说明：目录里的「维修工具」（Repair Kit，按 J 键读条维修）与本模组功能重叠，两者共存从未验证过，因此本条目刻意不声明冲突；如果两个都装了，请只保留一个开启。",
-      "zh-CN": "在游戏原生 Q 键上下文菜单里加入 Repair 子菜单，自己点要修哪个模块，而不是一次全修：发动机、变速箱、散热器、左履带、右履带。每个菜单项标着自己的耗时，五项合计 30 秒（发动机 8、变速箱 8、散热器 4、每条履带 5）；RepairSeconds 设为 0 就是立刻修完。\n\n读条期间该模块血量线性回升，屏幕底部显示剩余秒数，再次点击可取消并保留已修好的部分。倒计时结束后才清游戏内部的损坏标志、重启发动机、恢复被弄坏之前的变速箱挡位类型、重新供电并点亮炮塔平台；只有发动机和两条履带最终都健康时才会解除底盘 broken 标志与手刹——所以只修散热器不会把瘫痪的车变成能开的。\n\n不修外观凹陷、不复活乘员、不加弹药。\n\n需要 MelonLoader。在 0.1.0-alpha+20261014 版本实测。\n\n说明：目录里的「维修工具」（Repair Kit，按 J 键读条维修）与本模组功能重叠，两者共存从未验证过，因此本条目刻意不声明冲突；如果两个都装了，请只保留一个开启。"
+      "en-US": "Adds a Repair submenu to the game's own Q context menu, so you pick which module to fix instead of repairing everything at once: engine, transmission, radiator, left track or right track. Each module has its own countdown - all five together take 30 seconds - and the remaining time is shown at the bottom of the screen. Pressing Q again cancels the job and keeps whatever was already repaired.",
+      "zh-CN": "在游戏原生的 Q 菜单里加一个 Repair 子菜单，点哪个模块修哪个，而不是一键全修：发动机、变速箱、散热器、左履带、右履带。每个模块各自读条，五个全修完正好 30 秒，读条期间屏幕底部显示剩余时间。再按一次 Q 取消，已经修好的部分保留。"
     },
     "Tags": {
-      "enhancement": { "zh-CN": "游戏增强", "en-US": "Game Enhancement" },
-      "utility": { "zh-CN": "实用工具", "en-US": "Utility" }
+      "enhancement": {
+        "zh-CN": "游戏增强",
+        "en-US": "Game Enhancement"
+      }
     },
-    "SupportedGameVersions": ["20261014"],
-    "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-mods/releases/latest",
-    "TargetFileNameKeyword": "RepairMenu",
+    "SupportedGameVersions": [
+      "20261014"
+    ],
+    "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-RepairMenu/releases/latest",
+    "TargetFileNameKeyword": ".zip",
     "MainBinaryFileName": "RepairMenu.dll",
     "ConfigSectionName": "RepairMenu",
-    "InstallMethod": "DirectRelease",
-    "Conflicts": [],
-    "Requirements": []
+    "InstallMethod": "DirectRelease"
   },
   {
     "Id": "WreckCleanup",
+    "Author": "rhino2024",
     "Name": {
-      "en-US": "残骸清理",
+      "en-US": "Wreck Cleanup",
       "zh-CN": "残骸清理"
     },
     "Description": {
-      "en-US": "燃烧的残骸很吃帧，所以场上残骸一多本模组就清场。它盯着游戏自己判定为已损失的载具（就是伤亡统计与战术地图读的那个 neutralized 标志），一旦场上达到 WreckThreshold（默认 3）辆，就把所有已燃烧超过 WreckDelay（默认 8 秒）的残骸一次性清掉；不到阈值完全不动——是「到数就清场」而不是逐个慢慢消失。F8 可在任务中随时开关。\n\n残骸是用 SetActive(false) 加上游戏自己的隐藏标志处理的，绝不 Destroy：销毁会让游戏的单位列表与 AI 目标引用指向失效对象并抛 MissingReferenceException（SceneUnitsManager 只在列表为空时才重建），隐藏则让所有引用继续有效，下一轮扫描自然排除。\n\n游戏播放自己的战后报告期间，本模组隐藏过的一切都会还原（那段回放要拍到这些车），报告结束后再清。\n\n只处理地面与空中载具，跳过步兵、固定工事与玩家当前座车；不修复、不复活任何东西。\n\n需要 MelonLoader。在 0.1.0-alpha+20261014 版本实测。",
-      "zh-CN": "燃烧的残骸很吃帧，所以场上残骸一多本模组就清场。它盯着游戏自己判定为已损失的载具（就是伤亡统计与战术地图读的那个 neutralized 标志），一旦场上达到 WreckThreshold（默认 3）辆，就把所有已燃烧超过 WreckDelay（默认 8 秒）的残骸一次性清掉；不到阈值完全不动——是「到数就清场」而不是逐个慢慢消失。F8 可在任务中随时开关。\n\n残骸是用 SetActive(false) 加上游戏自己的隐藏标志处理的，绝不 Destroy：销毁会让游戏的单位列表与 AI 目标引用指向失效对象并抛 MissingReferenceException（SceneUnitsManager 只在列表为空时才重建），隐藏则让所有引用继续有效，下一轮扫描自然排除。\n\n游戏播放自己的战后报告期间，本模组隐藏过的一切都会还原（那段回放要拍到这些车），报告结束后再清。\n\n只处理地面与空中载具，跳过步兵、固定工事与玩家当前座车；不修复、不复活任何东西。\n\n需要 MelonLoader。在 0.1.0-alpha+20261014 版本实测。"
+      "en-US": "Once 3 or more wrecks are sitting on the field, every wreck that has been burning for 8 seconds is cleared away, so a long battle stops losing frames to vehicles nobody is driving. Nothing happens below that count, F8 turns it off mid-mission, and the wrecks are shown again while the after action replay runs.",
+      "zh-CN": "场上堆了 3 辆以上残骸后，烧了 8 秒以上的那些会被收走，免得长时间作战一直为没人开的空车掉帧。不到这个数它什么都不做，F8 可以随时关掉，战后回放期间残骸会重新显示。"
     },
     "Tags": {
-      "enhancement": { "zh-CN": "游戏增强", "en-US": "Game Enhancement" },
-      "utility": { "zh-CN": "实用工具", "en-US": "Utility" }
+      "utility": {
+        "zh-CN": "实用工具",
+        "en-US": "Utility"
+      }
     },
-    "SupportedGameVersions": ["20261014"],
-    "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-mods/releases/latest",
-    "TargetFileNameKeyword": "WreckCleanup",
+    "SupportedGameVersions": [
+      "20261014"
+    ],
+    "ReleaseUrl": "https://api.github.com/repos/rhino2024/GHPC-WreckCleanup/releases/latest",
+    "TargetFileNameKeyword": ".zip",
     "MainBinaryFileName": "WreckCleanup.dll",
     "ConfigSectionName": "WreckCleanup",
-    "InstallMethod": "DirectRelease",
-    "Conflicts": [],
-    "Requirements": []
+    "InstallMethod": "DirectRelease"
   }
 ]

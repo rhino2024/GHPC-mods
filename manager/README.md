@@ -12,51 +12,49 @@ These are the paste-ready blocks for the community directory that
 Pushing those two files to `RoyZ-iwnl/GHPC-Mod-Manager-Web` (fork + PR) is what makes an entry visible to
 everyone; a GitHub Action deploys `config/**` on merge.
 
-## Why both entries point at one release
+## One repository per entry
 
 Confirmed from the manager's source, not guessed:
 
-* `Services/Mod/ModManagerService.cs` - `GetRepoOwner()` / `GetRepoName()` read only the owner and
-  repository segments of `ReleaseUrl`, so `/releases/tags/<tag>` behaves the same as `/releases/latest`:
-  the version the browser lists is `releases.FirstOrDefault()?.TagName`, i.e. the newest release of the
-  repository.
-* `Services/Mod/ModManagerService.Replace.cs` - `DownloadModPackageAsync()` then looks that tag up in the
-  same list and picks the asset with `Assets.FirstOrDefault(a => a.Name.Contains(TargetFileNameKeyword))`.
+* `GetRepoOwner()` / `GetRepoName()` read only the owner and repository segments of `ReleaseUrl`, and the
+  installable version is `releases.FirstOrDefault()?.TagName`, i.e. the repository's newest release.
+  `/releases/latest` and `/releases/tags/<tag>` therefore behave the same.
+* `DownloadModPackageAsync()` looks that tag up in the same list and picks the asset with
+  `Assets.FirstOrDefault(a => a.Name.Contains(TargetFileNameKeyword))`.
 
-So one repository cannot drive two entries with two separate releases: whichever one is newest would be
-the only one the other entry can reach, and its asset would not match the other keyword.
-**The newest release of this repository must carry every zip the directory references** - right now
-`GHPC-RepairMenu-1.0.2.zip` and `GHPC-WreckCleanup-1.0.2.zip` together in one release tagged `v1.0.2`.
-`TargetFileNameKeyword` (`RepairMenu`, `WreckCleanup`) is what keeps the two entries from taking each other's
-file, which is why the zip names are unique rather than plain `.zip`. Only those two zips go into the newest
-release: `Contains` is a substring test, so an extra asset whose name also holds the keyword would make the
-choice depend on asset order.
+Each entry now points at its own repository (`rhino2024/GHPC-RepairMenu`, `rhino2024/GHPC-WreckCleanup`),
+so `releases/latest` of that repository always resolves to a release built for this entry. Keep it that
+way: one release, one asset. `TargetFileNameKeyword` is `.zip`, a substring test that succeeds on the
+single `GHPC-<name>-<version>.zip` asset; a second asset would make the choice depend on asset order.
 
 ## Zip layout
 
-`InstallMethod: "DirectRelease"` unpacks straight into `<GameRoot>/Mods`, and the GameRoot the manager asks
-for is the game's `Bin` folder. So the registered zips hold `RepairMenu.dll` / `WreckCleanup.dll` **flat at
-the zip root** - the manually downloadable `GHPC-*.zip` archives keep the nested `Bin/Mods/…` layout that
-suits copy-it-yourself installs, and extracting those through the manager would produce
-`Mods/Bin/Mods/…` and load nothing.
+`InstallMethod: "DirectRelease"` extracts the archive into `<GameRoot>/Mods`, where the GameRoot the
+manager asks for is the game's `Bin` folder. The registered zips hold `README.txt` plus
+`Bin/Mods/<dll>`, and `ExtractArchiveAsync(detectDllRoot: true)` strips the directory of the first `.dll`
+entry, so the files land as `Mods/<dll>` and `Mods/README.txt`.
 
-## `Conflicts` is left empty on purpose
+## Locale slots and identity
+
+`Name` / `Description` carry separate `en-US` and `zh-CN` text; both slots are filled because the manager
+picks one by client locale. `Author` is set, and `SupportedGameVersions` lists `20261014`, the build the
+mods were tested on. The ASCII identifiers (`Id`, `TargetFileNameKeyword`, `MainBinaryFileName`,
+`ConfigSectionName`) stay English because they are matched against file names and the
+`MelonPreferences.cfg` section.
+
+## Labels and comments
+
+`ConfigLabels` covers every setting. `ConfigComments` keys are the English comment strings from the mod
+source verbatim - the manager looks a comment up by that text, so renaming a setting means updating both
+the label key and the comment key.
+
+## `Conflicts` is omitted
 
 A listed conflict makes the manager's launch check report **Failed** rather than warn. `Repair Kit` covers
-similar ground to 载具维修菜单, but the two have never been run against each other, so the overlap is
-described in the entry text instead of asserted as a conflict.
-
-## Names are Chinese in both locale slots
-
-Every directory entry carries `Name` / `Description` as `{ "en-US", "zh-CN" }` and the manager picks one by
-client locale, so an empty slot shows as a blank row. Both slots of these two entries hold the same Chinese
-text - 载具维修菜单 and 残骸清理 - on purpose: the listing is what the author maintains, and the ASCII
-identifiers (`Id`, `TargetFileNameKeyword`, `MainBinaryFileName`, `ConfigSectionName`) stay English because
-they are matched against file names and the `MelonPreferences.cfg` section.
+similar ground to 载具维修菜单, but the two have never been run against each other, so no conflict is
+asserted.
 
 ## Not registered yet
 
-命中回放小窗 (`HitCam`) and 第三人称瞄准环 (`SlewReticle`) overlap `GHPC Combat Overhaul` (X-ray kill cam,
-War Thunder style HUD) on the same interior materials and the same camera objects. Until that combination is
-actually tested, an entry for them could not honestly state whether it conflicts. Adding them later means
-putting their zips into the same newest release.
+命中回放小窗 (`HitCam`) and 第三人称瞄准环 (`SlewReticle`) have no entry. If they are added, each one gets
+its own repository and its own entry, following the same pattern.
